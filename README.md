@@ -1,507 +1,182 @@
-# 热源雷达开发计划
+# 热源雷达 (HeatRadar)
 
-## 项目概览
+一款面向 Android 设备的实时资源监控工具，帮助你快速定位手机发热、卡顿、耗电异常的元凶应用。
 
-`热源雷达` 是一款面向 Android 设备的资源观察工具，目标是帮助用户快速判断当前手机中哪些应用正在占用较高的 CPU、内存或后台资源。产品首版聚焦“看见问题”和“解释问题”，不把自动杀后台、root 能力或复杂开发者模式作为核心卖点。
+## 功能特性
 
-首个版本建议以 Android App 形态开发，先跑通“采样 -> 存储 -> 展示 -> 异常提示”的闭环。只要用户能在手机发热、卡顿、掉电异常时快速看到可疑应用，产品的核心价值就已经成立。
+- **实时 CPU 排行**：展示当前 CPU 占用最高的应用，采样间隔 3 秒
+- **实时内存排行**：展示各应用的实际物理内存占用 (RSS/PSS)
+- **设备状态概览**：CPU 使用率、CPU 频率、内存占用、电池温度
+- **应用详情**：单个应用的 CPU、内存、活跃时长等详细信息
+- **趋势记录**：历史采样数据存储，支持查看资源占用趋势
+- **异常提醒**：自动识别高资源占用应用并给出提示
+- **多数据源支持**：Shizuku（推荐）/ ADB 后台进程 / UsageStats 自动降级
 
-## 产品目标
+## 截图
 
-### 用户目标
+（待补充）
 
-- 用户可以快速看到当前 CPU 占用较高的应用排行。
-- 用户可以快速看到当前内存占用较高的应用排行。
-- 用户可以判断某个应用是短时高占用，还是持续在后台活跃。
-- 用户可以通过清晰的提示理解手机发热、卡顿、掉电可能由谁造成。
+## 系统要求
 
-### 开发目标
+- **最低版本**：Android 10 (API 29)
+- **目标版本**：Android 15 (API 35)
+- **架构**：Kotlin + Jetpack Compose + MVVM
 
-- 建立 Android 项目基础架构。
-- 完成首页、应用详情页、趋势页、设置页的基础功能。
-- 完成本地采样、存储和展示链路。
-- 在真机上验证数据采集稳定性和性能开销。
-- 形成可演示的 MVP 版本。
+## 获取真实数据的方式
 
-## 技术选型
+由于 Android 系统的沙箱限制，普通应用无法直接读取其他进程的 CPU 和内存数据。HeatRadar 支持三种数据源，自动降级：
 
-| 类别 | 建议方案 | 说明 |
+### 1. Shizuku（推荐，完整功能）
+
+Shizuku 允许应用以 ADB/shell 权限执行系统命令，可获取所有进程的真实 CPU% 和内存数据。
+
+**安装步骤：**
+
+1. 下载安装 [Shizuku](https://github.com/RikkaApps/Shizuku/releases)（也可在酷安搜索"Shizuku"）
+2. 启动 Shizuku 服务（以下方式任选其一）：
+   - **无线调试（Android 11+，推荐）**：开发者选项 → 开启"无线调试" → Shizuku 应用中点击"启动" → 按提示配对
+   - **USB 连接电脑**：执行以下命令
+     ```bash
+     # 启动 Shizuku 服务（路径可能因设备和版本不同，以 Shizuku 应用中"通过连接电脑启动"显示的命令为准）
+     adb shell /data/app/~~*/moe.shizuku.privileged.api-*/lib/arm64/libshizuku.so
+     ```
+3. 首次使用需在 Shizuku 弹窗中授权 HeatRadar
+4. 重启设备后需重新启动 Shizuku 服务（无线调试方式只需在 Shizuku 中点一下"启动"）
+
+### 2. ADB 后台进程（开发/调试用）
+
+通过 adb 启动后台 `top` 进程持续写入数据文件：
+
+```bash
+adb shell "nohup sh -c 'while true; do top -n 1 -b -q -o PID,USER,%CPU,RSS,NAME > /sdcard/Android/data/com.example.heatradar/files/top_output.txt 2>&1; sleep 3; done' >/dev/null 2>&1 &"
+```
+
+设备重启后需重新执行。
+
+### 3. UsageStats（降级方案，功能受限）
+
+无需额外安装，但仅能获取：
+- 应用前台使用时长（需用户手动在系统设置中授权"使用情况访问权限"）
+- 自身进程的 CPU/内存数据
+- 无法获取其他应用的实时 CPU 和内存
+
+**授权方式**：系统设置 → 应用管理 → 特殊应用权限 → 使用情况访问 → 允许 HeatRadar
+
+## 技术栈
+
+| 类别 | 技术 | 说明 |
 |---|---|---|
 | 开发语言 | Kotlin | Android 主流开发语言 |
-| UI 框架 | Jetpack Compose | 开发效率高，适合快速迭代界面 |
-| 架构模式 | MVVM | 结构清晰，便于页面与数据逻辑解耦 |
-| 异步处理 | Kotlin Coroutines + Flow | 适合采样流、数据库流和 UI 状态更新 |
-| 本地数据库 | Room | 保存采样记录、趋势数据、异常事件 |
-| 后台任务 | WorkManager | 适合周期性轻量采样 |
-| 长时间采样 | Foreground Service | 后续版本可用于持续监控模式 |
-| 依赖注入 | Hilt | 管理 Repository、DAO、采样器等依赖 |
-| 页面导航 | Navigation Compose | 管理首页、详情页、趋势页、设置页跳转 |
-| 日志 | Timber 或 Android Log | 首版可以先用 Log，后续再换 Timber |
+| UI 框架 | Jetpack Compose | 声明式 UI |
+| 架构模式 | MVVM | Repository + ViewModel |
+| 异步处理 | Kotlin Coroutines | 采样循环与数据查询 |
+| 本地数据库 | Room | 采样记录、设备状态持久化 |
+| 依赖注入 | Hilt | 管理全局依赖 |
+| 页面导航 | Navigation Compose | 页面路由 |
+| 跨进程 | Shizuku UserService (AIDL) | 通过 Shizuku 以 shell 权限执行命令 |
+| CPU 采集 | /sys/devices/system/cpu/cpu*/cpufreq/stats/time_in_state | 基于频率时间数据的双采样算法 |
+| 进程扫描 | Shizuku/ADB 执行 `top -n 1 -b -q` | 获取所有进程的 CPU% 和 RSS |
 
-## 推荐项目结构
+## 项目结构
 
-```text
-app/
-  src/main/
-    java/com/example/heatradar/
-      MainActivity.kt
-      HeatRadarApplication.kt
-
-core/
-  common/
-    Constants.kt
-    Result.kt
-  ui/
-    theme/
-    components/
-  database/
-    AppDatabase.kt
-    dao/
-    entity/
-  monitor/
-    sampler/
-    model/
-    rule/
-
-feature/
-  dashboard/
-    DashboardScreen.kt
-    DashboardViewModel.kt
-  appdetail/
-    AppDetailScreen.kt
-    AppDetailViewModel.kt
-  trends/
-    TrendsScreen.kt
-    TrendsViewModel.kt
-  settings/
-    SettingsScreen.kt
-    SettingsViewModel.kt
+```
+app/src/main/java/com/example/heatradar/
+├── app/                          # 应用入口
+│   ├── HeatRadarApplication.kt   # Hilt 应用类
+│   └── MainActivity.kt           # 主 Activity + Navigation
+├── core/
+│   ├── common/                   # 公共工具
+│   ├── database/                 # Room 数据库层
+│   │   ├── AppDatabase.kt        # 数据库定义
+│   │   ├── HeatRadarRepository.kt # 数据仓库
+│   │   └── *Entity.kt / *Dao.kt  # 实体与 DAO
+│   ├── monitor/                  # 数据采集核心
+│   │   ├── RealSampler.kt        # 真实采样器（3秒间隔主循环）
+│   │   ├── FakeSampler.kt        # 假数据生成器
+│   │   ├── ProcessScanner.kt     # 进程扫描（Shizuku/TopFile/UsageStats 三级降级）
+│   │   ├── DeviceStateProvider.kt # 设备状态（CPU/内存/温度）
+│   │   ├── AppInfoProvider.kt    # 已安装应用列表
+│   │   ├── ForegroundAppProvider.kt # 前台应用检测
+│   │   ├── ShizukuServiceManager.kt # Shizuku 连接管理
+│   │   └── CommandService.kt     # Shizuku UserService 实现（AIDL）
+│   └── ui/theme/                 # Compose 主题
+└── feature/                      # 功能页面
+    ├── dashboard/                # 首页 - CPU/内存 Top 榜单
+    ├── appdetail/                # 应用详情页
+    ├── trends/                   # 趋势页
+    └── settings/                 # 设置页
 ```
 
-## 核心模块
+## 数据源优先级
 
-### 首页 Dashboard
+ProcessScanner 在每次扫描时按以下优先级选择数据源：
 
-首页是用户打开 App 后最重要的入口，负责回答“现在谁最占资源”。
+1. **Shizuku**（`source=shizuku`）：80+ 个应用，实时 CPU% + RSS 内存，最全数据
+2. **ADB TopFile**（`source=topfile`）：70+ 个应用，读取后台 top 进程写入的文件
+3. **UsageStats**（`source=usagestats`）：仅前台时长，无实时 CPU/内存
+4. **System API**（`source=system`）：仅可见进程（通常只有自身）
+5. **Self**（`source=self`）：保底，至少展示自身进程
 
-首版需要包含：
+## 构建与安装
 
-- 设备状态概览：电量、内存总体使用、基础状态提示。
-- CPU Top：展示当前 CPU 占用较高的应用排行。
-- 内存 Top：展示当前内存占用较高的应用排行。
-- 异常卡片：用自然语言提示当前可疑问题。
-- 跳转入口：点击应用进入详情页。
+### 前置条件
 
-### 应用详情页
+- Android Studio Ladybug 或更高版本
+- JDK 17
+- Android SDK 35
+- Gradle 8.9
 
-应用详情页负责回答“这个应用为什么可疑”。
+### 构建 Debug APK
 
-首版需要包含：
-
-- 应用名称、包名、图标。
-- 当前 CPU 占用情况。
-- 当前内存占用情况。
-- 最近活跃时间。
-- 最近一段时间的资源趋势。
-- 跳转系统应用详情页的入口。
-
-### 趋势页
-
-趋势页负责回答“这个问题是不是持续存在”。
-
-首版需要包含：
-
-- 最近 1 小时趋势。
-- 最近 24 小时趋势。
-- 高占用应用列表。
-- 异常事件记录。
-
-### 设置页
-
-设置页负责管理采样方式和提醒方式。
-
-首版需要包含：
-
-- 采样模式：轻量、平衡、精细。
-- 数据保留时长：1 天、3 天、7 天。
-- 异常提醒开关。
-- 隐私说明。
-
-## 数据模型建议
-
-### 应用信息表
-
-```kotlin
-data class AppInfoEntity(
-    val packageName: String,
-    val appName: String,
-    val iconPath: String?,
-    val firstSeenAt: Long,
-    val lastSeenAt: Long
-)
+```bash
+./gradlew assembleDebug
+# 输出位置: app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### 采样记录表
+### 安装到设备
 
-```kotlin
-data class ResourceSampleEntity(
-    val id: Long,
-    val packageName: String,
-    val timestamp: Long,
-    val cpuPercent: Float?,
-    val memoryKb: Long?,
-    val isForeground: Boolean
-)
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### 异常事件表
+### 构建 Release APK
 
-```kotlin
-data class AnomalyEventEntity(
-    val id: Long,
-    val packageName: String,
-    val type: String,
-    val level: String,
-    val message: String,
-    val startedAt: Long,
-    val endedAt: Long?
-)
+```bash
+./gradlew assembleRelease
 ```
 
-## 数据采集策略
+## 已知限制
 
-### 首版原则
+- **Android 10+ 沙箱限制**：普通应用无法通过 `/proc` 直接读取其他进程信息，必须依赖 Shizuku 或 ADB
+- **SELinux 策略**：部分设备（如 Google Pixel、Huawei）的 SELinux 策略更严格，可能阻止某些数据采集
+- **Shizuku 重启失效**：设备重启后 Shizuku 服务需要重新启动（无线调试方式最快，点一下即可）
+- **ADB 后台进程**：可能被 MIUI 等系统的省电策略杀掉，应用检测到文件超过 30 秒未更新会自动降级
+- **内存数据**：Shizuku/TopFile 方案获取的是 RSS（常驻内存），System API 获取的是 PSS（比例分配内存），两者口径略有差异
+- **CPU 百分比**：`top` 命令的 CPU% 基于单次采样，多核设备上单进程可能超过 100%
 
-首版优先使用普通 Android App 可接受的系统能力，不依赖 root，不要求用户连接电脑，不把 ADB 作为默认能力。
+## 调试技巧
 
-采样策略要尽量轻量，避免产品自己成为高耗电源。建议默认使用“平衡模式”，只在用户主动打开 App 或开启精细模式时提高采样频率。
+### 查看实时日志
 
-### 采样模式
+```bash
+adb logcat -s ProcessScanner:* RealSampler:* DeviceStateProvider:* ShizukuServiceManager:*
+```
 
-| 模式 | 采样频率 | 适用场景 |
-|---|---:|---|
-| 轻量 | 30-60 秒一次 | 日常后台趋势记录 |
-| 平衡 | 10-15 秒一次 | 默认模式 |
-| 精细 | 1-3 秒一次 | 用户主动观察时使用 |
+### 验证 Shizuku 是否工作
 
-### 异常判断规则
+日志中查找 `shizukuReady=true` 和 `source=shizuku`，正常应解析 70-90 个应用进程。
 
-首版建议先使用静态规则，不做复杂模型。
+### 验证数据采集
 
-示例规则：
+```bash
+# 查看扫描到的进程数和 Top CPU 应用
+adb logcat -d -s ProcessScanner:* | grep "scanAllProcesses\|Top by CPU"
+```
 
-- 某应用连续多次出现在 CPU Top 前 3。
-- 某应用在后台持续活跃超过设定阈值。
-- 某应用内存占用持续增长。
-- 当前设备状态异常时，某应用资源占用明显高于其他应用。
+## 许可证
 
-## MVP 范围
+（待确定）
 
-### 必须做
+## 致谢
 
-- Android 项目初始化。
-- 首页静态 UI。
-- 应用列表读取。
-- CPU Top 展示。
-- 内存 Top 展示。
-- Room 本地数据库。
-- 基础采样服务。
-- 应用详情页。
-- 1 小时与 24 小时趋势。
-- 异常提醒卡片。
-- 设置页基础选项。
-
-### 暂不做
-
-- 自动杀后台。
-- root 增强模式。
-- ADB 增强模式。
-- 悬浮窗。
-- 云同步。
-- 账号系统。
-- 导出 PDF 报告。
-- 企业终端管理能力。
-
-## 开发计划
-
-## 第一阶段：环境与工程初始化
-
-周期：第 1 周
-
-目标是完成开发环境、工程结构和基础依赖配置。
-
-主要任务：
-
-- 安装并配置 Android Studio。
-- 创建 Kotlin + Compose 项目。
-- 设置 `minSdk = 29`。
-- 接入 Navigation Compose。
-- 接入 Room。
-- 接入 Hilt。
-- 接入 Coroutines 和 Flow。
-- 创建基础包结构。
-- 跑通真机调试。
-
-交付物：
-
-- 可运行的 Android 空项目。
-- 基础页面导航。
-- Git 仓库初始化。
-- 真机调试链路可用。
-
-## 第二阶段：UI 壳子与假数据
-
-周期：第 2 周
-
-目标是在没有真实采样数据的情况下，先把主要页面搭出来。
-
-主要任务：
-
-- 完成首页 UI。
-- 完成应用详情页 UI。
-- 完成趋势页 UI。
-- 完成设置页 UI。
-- 使用假数据展示 CPU Top 和内存 Top。
-- 定义 UI 状态模型。
-- 定义页面跳转逻辑。
-
-交付物：
-
-- 可演示的静态版本。
-- 首页、详情页、趋势页、设置页全部可访问。
-- 假数据联调完成。
-
-## 第三阶段：本地数据库与数据链路
-
-周期：第 3 周
-
-目标是把采样结果存入本地，并从数据库驱动 UI。
-
-主要任务：
-
-- 设计 Room Entity。
-- 编写 DAO。
-- 编写 Repository。
-- 建立采样记录表。
-- 建立应用信息表。
-- 建立异常事件表。
-- 首页从数据库读取数据。
-- 详情页从数据库读取单应用数据。
-
-交付物：
-
-- Room 数据库可用。
-- 假采样数据可以入库。
-- 首页和详情页可以展示数据库数据。
-
-## 第四阶段：真实数据采样
-
-周期：第 4 周
-
-目标是接入真实 Android 设备数据，验证核心能力。
-
-主要任务：
-
-- 获取已安装应用列表。
-- 获取当前运行状态相关信息。
-- 获取内存占用相关信息。
-- 尝试获取 CPU 占用相关信息。
-- 建立采样器接口。
-- 按固定频率写入采样记录。
-- 在真机上验证不同 Android 版本的数据差异。
-
-交付物：
-
-- 真实采样 Demo。
-- 首页可以展示真实数据。
-- 记录数据口径和兼容性问题。
-
-## 第五阶段：异常规则与解释层
-
-周期：第 5 周
-
-目标是让产品不只是展示数字，而是能解释问题。
-
-主要任务：
-
-- 定义异常规则。
-- 识别持续高 CPU 占用。
-- 识别后台持续活跃。
-- 识别内存异常增长。
-- 生成异常提醒文案。
-- 在首页展示异常卡片。
-- 在详情页展示异常说明。
-
-交付物：
-
-- 异常规则引擎初版。
-- 异常卡片可用。
-- 详情页可解释异常原因。
-
-## 第六阶段：联调与性能优化
-
-周期：第 6 周
-
-目标是让 MVP 在真机上稳定运行。
-
-主要任务：
-
-- 优化采样频率。
-- 降低后台运行开销。
-- 处理 App 关闭和重启后的数据恢复。
-- 优化首页加载速度。
-- 修复不同 ROM 上的兼容问题。
-- 完成核心路径测试。
-
-交付物：
-
-- 可安装内测包。
-- 性能测试记录。
-- 兼容性问题列表。
-
-## 第七阶段：内测与迭代
-
-周期：第 7 周
-
-目标是小范围验证真实用户是否看得懂、用得上。
-
-主要任务：
-
-- 邀请 3-5 名用户试用。
-- 收集用户是否能理解榜单和异常提示。
-- 记录用户遇到的误解和卡点。
-- 调整首页文案和信息排序。
-- 修复关键 bug。
-
-交付物：
-
-- MVP 内测版。
-- 用户反馈记录。
-- 下一版本优化方向。
-
-## 第一周具体任务
-
-如果你现在已经装好 Android Studio，可以先从第一周开始。
-
-### Day 1
-
-- 创建项目。
-- 确认 Kotlin + Compose 可运行。
-- 用真机跑通空项目。
-- 配置 Git。
-
-### Day 2
-
-- 搭建基础包结构。
-- 配置 Navigation Compose。
-- 创建首页、详情页、趋势页、设置页空页面。
-
-### Day 3
-
-- 接入 Room。
-- 创建数据库、Entity、DAO。
-- 写一个简单 Repository。
-
-### Day 4
-
-- 接入 Hilt。
-- 把 Repository 注入到 ViewModel。
-- 首页读取假数据并展示。
-
-### Day 5
-
-- 完成首页 CPU Top / 内存 Top 静态 UI。
-- 完成应用详情页基础 UI。
-
-### Day 6
-
-- 设计采样数据模型。
-- 写一个 FakeSampler，模拟采样数据入库。
-
-### Day 7
-
-- 从数据库读取采样数据展示到首页。
-- 整理第一周问题。
-- 确认第二周 UI 细化范围。
-
-## 验收标准
-
-### 工程验收
-
-- 项目可以在 Android Studio 中正常打开。
-- Gradle Sync 成功。
-- App 可以安装到真机。
-- 首页、详情页、趋势页、设置页可以正常跳转。
-
-### 功能验收
-
-- 首页可以展示 CPU Top 和内存 Top。
-- 点击应用可以进入详情页。
-- 假采样数据可以写入 Room。
-- 首页可以从 Room 读取数据。
-
-### 性能验收
-
-- App 首屏打开不应明显卡顿。
-- 假采样写入不会阻塞 UI。
-- 后台采样逻辑不能频繁唤醒造成明显耗电。
-
-## 风险与注意事项
-
-### Android 权限限制
-
-不同 Android 版本和不同厂商 ROM 对进程、内存、后台状态的可见性可能不同。开发时要尽早用真机验证，不要只依赖模拟器。
-
-### 数据准确性
-
-首版不要承诺“绝对精确”。产品表达上建议使用“资源占用线索”“可疑应用”“趋势判断”等说法，避免让用户误以为这是系统级精确任务管理器。
-
-### 采样开销
-
-采样频率过高会影响电量和性能。默认模式应偏保守，只有用户主动进入实时观察场景时才提高采样频率。
-
-### 产品预期
-
-不要把产品包装成“清理大师”或“杀后台工具”。核心定位应保持为“资源观察”和“问题诊断”。
-
-## 后续版本规划
-
-### V1
-
-- CPU Top
-- 内存 Top
-- 应用详情
-- 历史趋势
-- 异常提醒
-
-### V1.1
-
-- 更完善的趋势图
-- 更细的异常规则
-- 更多系统设置跳转入口
-- 采样模式优化
-
-### V1.2
-
-- 悬浮窗观察模式
-- 诊断报告导出
-- 分享异常记录
-
-### V2
-
-- ADB 增强模式
-- 开发者视图
-- 更详细的系统指标
-- 可选专业版能力
-
-## 当前下一步
-
-你现在已经安装好 Android Studio，建议立即开始第一周任务：
-
-1. 新建 Kotlin + Compose 项目。
-2. 跑通真机调试。
-3. 建立基础页面导航。
-4. 接入 Room。
-5. 用假数据完成首页 Top 榜单。
-
-完成这一步后，项目就从“想法”进入了真实开发状态。
+- [Shizuku](https://github.com/RikkaApps/Shizuku) - 提供 ADB 权限执行能力，是获取真实跨进程数据的核心依赖

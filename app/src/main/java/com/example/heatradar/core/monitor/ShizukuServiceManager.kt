@@ -26,6 +26,10 @@ class ShizukuServiceManager @Inject constructor() {
         }
     }
 
+    fun isConnected(): Boolean {
+        return commandService != null
+    }
+
     fun needsPermission(): Boolean {
         return try {
             Shizuku.pingBinder() &&

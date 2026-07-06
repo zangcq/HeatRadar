@@ -16,6 +16,7 @@ interface HeatRadarRepository {
     fun observeLatestDeviceState(): Flow<DeviceStateSnapshot>
     suspend fun getAppInfo(packageName: String): AppInfoEntity?
     suspend fun getLatestSample(packageName: String): ResourceSampleEntity?
+    suspend fun cleanupOldData()
 }
 
 @Singleton
@@ -69,6 +70,13 @@ class DefaultHeatRadarRepository @Inject constructor(
 
     override suspend fun getLatestSample(packageName: String): ResourceSampleEntity? {
         return resourceSampleDao.getLatestForApp(packageName)
+    }
+
+    override suspend fun cleanupOldData() {
+        val cutoff = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
+        resourceSampleDao.deleteOlderThan(cutoff)
+        deviceStateDao.deleteOlderThan(cutoff)
+        anomalyEventDao.deleteOlderThan(cutoff)
     }
 }
 

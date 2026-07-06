@@ -9,9 +9,10 @@ import android.content.pm.ApplicationInfo
 import android.os.Process
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.max
+import kotlin.math.min
 
 data class RunningProcess(
     val pid: Int,
@@ -27,8 +28,13 @@ data class RunningProcess(
 @Singleton
 class ProcessScanner @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val shizukuManager: ShizukuServiceManager
+    private val shizukuManager: ShizukuServiceManager,
+    private val daemonManager: DaemonManager
 ) {
+
+    companion object {
+        private const val PACKAGE_CACHE_TTL_MS = 5 * 60 * 1000L
+    }
 
     private val TAG = "ProcessScanner"
 
@@ -36,25 +42,45 @@ class ProcessScanner @Inject constructor(
     private val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
     private val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
+    private val cpuCoreCount: Int by lazy {
+        Runtime.getRuntime().availableProcessors()
+    }
+
     private var appNameCache = mutableMapOf<String, String>()
+    private var cachedKnownPackages: HashSet<String>? = null
+    private var cachedKnownPackagesTime: Long = 0L
+
+    private var currentDataSource: String = "unknown"
+
+    fun getCurrentDataSource(): String = currentDataSource
 
     fun scanAllProcesses(): List<RunningProcess> {
         val t0 = System.currentTimeMillis()
 
-        shizukuManager.ensureBound(context)
-        val shizukuReady = shizukuManager.isAvailable()
-        Log.i(TAG, "scanAllProcesses: shizukuReady=$shizukuReady")
+        daemonManager.ensureScriptReady()
 
-        val results = if (shizukuReady) {
-            val shizukuResult = scanViaShizuku()
-            if (shizukuResult.isNotEmpty()) shizukuResult else scanViaUsageStats()
-        } else {
-            if (shizukuManager.needsPermission()) {
-                shizukuManager.requestPermission()
+        val daemonReady = daemonManager.isTopOutputAvailable()
+        shizukuManager.ensureBound(context)
+        val shizukuReady = shizukuManager.isAvailable() && shizukuManager.isConnected()
+        Log.i(TAG, "scanAllProcesses: daemonReady=$daemonReady shizukuReady=$shizukuReady")
+
+        val results = when {
+            daemonReady -> {
+                val daemonResult = scanViaDaemon()
+                if (daemonResult.isNotEmpty()) daemonResult else {
+                    if (shizukuReady) scanViaShizuku() else scanViaUsageStats()
+                }
             }
-            // 优先尝试读取 ADB 后台 top 进程写入的文件（开发/调试方案，可获取真实 CPU 与内存）
-            val topFileResult = scanViaTopFile()
-            if (topFileResult.isNotEmpty()) topFileResult else scanViaUsageStats()
+            shizukuReady -> {
+                val shizukuResult = scanViaShizuku()
+                if (shizukuResult.isNotEmpty()) shizukuResult else scanViaUsageStats()
+            }
+            else -> {
+                if (shizukuManager.needsPermission()) {
+                    shizukuManager.requestPermission()
+                }
+                scanViaUsageStats()
+            }
         }
 
         if (results.isEmpty()) {
@@ -62,7 +88,7 @@ class ProcessScanner @Inject constructor(
         }
 
         val t1 = System.currentTimeMillis()
-        Log.i(TAG, "scanAllProcesses: ${results.size} apps in ${t1 - t0}ms (source=${results.values.firstOrNull()?.dataSource})")
+        Log.i(TAG, "scanAllProcesses: ${results.size} apps in ${t1 - t0}ms (source=$currentDataSource)")
         if (results.isNotEmpty()) {
             val topByCpu = results.values.sortedByDescending { it.cpuPercent }.take(8)
             Log.i(TAG, "  Top by CPU:")
@@ -73,6 +99,35 @@ class ProcessScanner @Inject constructor(
         }
 
         return results.values.sortedByDescending { it.cpuPercent * 1024f + it.memoryKb }
+    }
+
+    private fun normalizeCpuPercent(rawPercent: Float): Float {
+        val normalized = rawPercent / cpuCoreCount.toFloat()
+        return max(0f, min(100f, normalized))
+    }
+
+    private fun getKnownPackages(): HashSet<String> {
+        val now = System.currentTimeMillis()
+        val cached = cachedKnownPackages
+        if (cached != null && now - cachedKnownPackagesTime < PACKAGE_CACHE_TTL_MS) {
+            return cached
+        }
+        val packages = pm.getInstalledApplications(0)
+            .map { it.packageName }.toHashSet()
+        cachedKnownPackages = packages
+        cachedKnownPackagesTime = now
+        return packages
+    }
+
+    private fun hasUsageStatsPermission(): Boolean {
+        return try {
+            val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            appOps.checkOpNoThrow(
+                AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
+            ) == AppOpsManager.MODE_ALLOWED
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun scanViaShizuku(): MutableMap<String, RunningProcess> {
@@ -86,8 +141,7 @@ class ProcessScanner @Inject constructor(
 
             Log.i(TAG, "scanViaShizuku: top output length=${output.length}")
 
-            val knownPackages = pm.getInstalledApplications(0)
-                .map { it.packageName }.toHashSet()
+            val knownPackages = getKnownPackages()
 
             for (line in output.lines()) {
                 val parsed = parseTopLine(line) ?: continue
@@ -98,6 +152,7 @@ class ProcessScanner @Inject constructor(
                 val basePkg = pkg.substringBefore(':')
                 if (basePkg !in knownPackages) continue
 
+                val normalizedCpu = normalizeCpuPercent(parsed.cpuPercent)
                 val existing = results[basePkg]
                 if (existing == null || parsed.memoryKb > existing.memoryKb) {
                     results[basePkg] = RunningProcess(
@@ -105,13 +160,16 @@ class ProcessScanner @Inject constructor(
                         packageName = basePkg,
                         appName = getAppName(basePkg),
                         memoryKb = parsed.memoryKb,
-                        cpuPercent = parsed.cpuPercent,
+                        cpuPercent = normalizedCpu,
                         isVisibleToSystem = true,
                         dataSource = "shizuku"
                     )
                 }
             }
 
+            if (results.isNotEmpty()) {
+                currentDataSource = "shizuku"
+            }
             Log.i(TAG, "scanViaShizuku: parsed ${results.size} app processes")
         } catch (e: Exception) {
             Log.e(TAG, "scanViaShizuku failed", e)
@@ -119,47 +177,19 @@ class ProcessScanner @Inject constructor(
         return results
     }
 
-    /**
-     * 读取 ADB 后台 top 进程写入的文件（开发/调试方案）。
-     *
-     * 通过 `adb shell` 启动后台进程：
-     *   nohup sh -c 'while true; do top -n 1 -b -q -o PID,USER,%CPU,RSS,NAME \
-     *     > /sdcard/Android/data/<pkg>/files/top_output.txt 2>&1; sleep 3; done' >/dev/null 2>&1 &
-     *
-     * 该进程以 shell(uid 2000) 身份运行，可读取所有进程的真实 CPU 与内存数据，
-     * 应用本身只需读取自身外部文件目录下的文件即可，无需特殊权限。
-     *
-     * 局限：设备重启后后台进程会消失，需重新通过 adb 启动。
-     * 长期方案建议安装 Shizuku 应用（scanViaShizuku）。
-     */
-    private fun scanViaTopFile(): MutableMap<String, RunningProcess> {
+    private fun scanViaDaemon(): MutableMap<String, RunningProcess> {
         val results = mutableMapOf<String, RunningProcess>()
         try {
-            val topFile = File(context.getExternalFilesDir(null), "top_output.txt")
-            if (!topFile.exists()) {
-                Log.d(TAG, "scanViaTopFile: file not found")
-                return results
-            }
-            if (!topFile.canRead()) {
-                Log.w(TAG, "scanViaTopFile: file exists but not readable")
+            val output = daemonManager.readTopOutput()
+            if (output.isNullOrBlank()) {
+                Log.w(TAG, "scanViaDaemon: empty output")
                 return results
             }
 
-            // 检查文件新鲜度：超过 30 秒未更新视为后台进程已停止
-            val ageMs = System.currentTimeMillis() - topFile.lastModified()
-            if (ageMs > 30_000L) {
-                Log.w(TAG, "scanViaTopFile: file stale (age=${ageMs}ms), background top process may be dead")
-                return results
-            }
+            val status = daemonManager.getDaemonStatus()
+            Log.i(TAG, "scanViaDaemon: output length=${output.length}, pid=${status.pid}, age=${status.outputFileAgeMs}ms")
 
-            val output = topFile.readText()
-            if (output.isBlank()) {
-                Log.w(TAG, "scanViaTopFile: empty file")
-                return results
-            }
-
-            val knownPackages = pm.getInstalledApplications(0)
-                .map { it.packageName }.toHashSet()
+            val knownPackages = getKnownPackages()
 
             for (line in output.lines()) {
                 val parsed = parseTopLine(line) ?: continue
@@ -170,6 +200,7 @@ class ProcessScanner @Inject constructor(
                 val basePkg = pkg.substringBefore(':')
                 if (basePkg !in knownPackages) continue
 
+                val normalizedCpu = normalizeCpuPercent(parsed.cpuPercent)
                 val existing = results[basePkg]
                 if (existing == null || parsed.memoryKb > existing.memoryKb) {
                     results[basePkg] = RunningProcess(
@@ -177,16 +208,19 @@ class ProcessScanner @Inject constructor(
                         packageName = basePkg,
                         appName = getAppName(basePkg),
                         memoryKb = parsed.memoryKb,
-                        cpuPercent = parsed.cpuPercent,
+                        cpuPercent = normalizedCpu,
                         isVisibleToSystem = true,
-                        dataSource = "topfile"
+                        dataSource = "daemon"
                     )
                 }
             }
 
-            Log.i(TAG, "scanViaTopFile: parsed ${results.size} app processes (file age=${ageMs}ms)")
+            if (results.isNotEmpty()) {
+                currentDataSource = "daemon"
+            }
+            Log.i(TAG, "scanViaDaemon: parsed ${results.size} app processes")
         } catch (e: Exception) {
-            Log.e(TAG, "scanViaTopFile failed", e)
+            Log.e(TAG, "scanViaDaemon failed", e)
         }
         return results
     }
@@ -234,10 +268,7 @@ class ProcessScanner @Inject constructor(
     private fun scanViaUsageStats(): MutableMap<String, RunningProcess> {
         val results = mutableMapOf<String, RunningProcess>()
 
-        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-        val hasUsageAccess = appOps.checkOpNoThrow(
-            AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
-        ) == AppOpsManager.MODE_ALLOWED
+        val hasUsageAccess = hasUsageStatsPermission()
 
         val runningProcs = am.runningAppProcesses ?: emptyList()
         val visiblePids = runningProcs.map { it.pid }.toIntArray()
@@ -270,6 +301,8 @@ class ProcessScanner @Inject constructor(
                 dataSource = "system"
             )
         }
+
+        currentDataSource = if (hasUsageAccess) "usagestats" else "system"
 
         if (hasUsageAccess) {
             val recentStats = getRecentUsageStats()
@@ -350,6 +383,7 @@ class ProcessScanner @Inject constructor(
                 isVisibleToSystem = true,
                 dataSource = "self"
             )
+            currentDataSource = "self"
         } catch (e: Exception) {
             Log.e(TAG, "addOwnProcess failed", e)
         }

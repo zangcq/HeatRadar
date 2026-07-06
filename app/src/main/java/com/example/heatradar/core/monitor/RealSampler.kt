@@ -28,8 +28,14 @@ class RealSampler @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
-    private var sampleIntervalMs: Long = 3_000L
+    private val isAppInForeground = AtomicBoolean(true)
+
+    private val foregroundIntervalMs: Long = 3_000L
+    private val backgroundIntervalMs: Long = 30_000L
+    private val cleanupEveryNSamples = 10
+
     private var appInfoSynced = false
+    private var sampleCount = 0
 
     fun start() {
         if (started.getAndSet(true)) return
@@ -41,12 +47,21 @@ class RealSampler @Inject constructor(
                         syncAppInfo()
                         appInfoSynced = true
                     }
+
                     sampleOnce()
                     sampleDeviceState()
+                    sampleCount++
+
+                    if (sampleCount >= cleanupEveryNSamples) {
+                        sampleCount = 0
+                        cleanupOldData()
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "sample loop error", e)
                 }
-                delay(sampleIntervalMs)
+
+                val interval = if (isAppInForeground.get()) foregroundIntervalMs else backgroundIntervalMs
+                delay(interval)
             }
         }
     }
@@ -55,8 +70,14 @@ class RealSampler @Inject constructor(
         scope.cancel()
     }
 
-    fun setInterval(intervalMs: Long) {
-        sampleIntervalMs = intervalMs
+    fun onAppForeground() {
+        isAppInForeground.set(true)
+        Log.i(TAG, "onAppForeground: sampling at ${foregroundIntervalMs}ms interval")
+    }
+
+    fun onAppBackground() {
+        isAppInForeground.set(false)
+        Log.i(TAG, "onAppBackground: sampling reduced to ${backgroundIntervalMs}ms interval")
     }
 
     private suspend fun syncAppInfo() {
@@ -81,7 +102,7 @@ class RealSampler @Inject constructor(
             val sample = ResourceSampleEntity(
                 packageName = proc.packageName,
                 timestamp = now2,
-                cpuPercent = proc.cpuPercent.coerceIn(0f, 400f),
+                cpuPercent = proc.cpuPercent.coerceIn(0f, 100f),
                 memoryBytes = proc.memoryKb * 1024L,
                 activeMinutes = proc.foregroundMinutes
             )
@@ -105,5 +126,14 @@ class RealSampler @Inject constructor(
             foregroundPackageName = foreground
         )
         repository.insertDeviceState(entity)
+    }
+
+    private suspend fun cleanupOldData() {
+        try {
+            repository.cleanupOldData()
+            Log.i(TAG, "cleanupOldData: cleaned data older than 7 days")
+        } catch (e: Exception) {
+            Log.e(TAG, "cleanupOldData: error", e)
+        }
     }
 }

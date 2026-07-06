@@ -1,7 +1,9 @@
 package com.example.heatradar.feature.dashboard
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,8 +17,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Warning
@@ -27,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,13 +42,20 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.drawable.toBitmap
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.heatradar.R
@@ -57,9 +72,12 @@ fun DashboardScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val hasUsagePermission by viewModel.hasUsagePermission.collectAsStateWithLifecycle()
+    val dataSource by viewModel.dataSource.collectAsStateWithLifecycle()
+    val daemonStatus by viewModel.daemonStatus.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         viewModel.refreshPermission()
+        viewModel.deployDaemonScript()
     }
 
     Scaffold(
@@ -90,6 +108,16 @@ fun DashboardScreen(
                 }
             }
 
+            item {
+                DataSourceCard(
+                    dataSource = dataSource,
+                    daemonRunning = daemonStatus.isRunning,
+                    daemonPid = daemonStatus.pid,
+                    adbCommand = viewModel.daemonAdbCommand,
+                    onCopyCommand = { viewModel.copyDaemonCommand() }
+                )
+            }
+
             item { DeviceStateCard(uiState.deviceState) }
 
             item {
@@ -103,6 +131,193 @@ fun DashboardScreen(
             items(uiState.cpuTop, key = { it.packageName }) { snapshot ->
                 AppResourceCard(snapshot, onClick = { onAppClick(snapshot.packageName) })
             }
+        }
+    }
+}
+
+@Composable
+private fun DataSourceCard(
+    dataSource: String,
+    daemonRunning: Boolean,
+    daemonPid: Int,
+    adbCommand: String,
+    onCopyCommand: () -> Unit
+) {
+    when {
+        dataSource == "daemon" -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFE8F5E9)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color(0xFF2E7D32),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "本地守护进程运行中 (PID: $daemonPid)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF2E7D32),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+        dataSource == "shizuku" -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFE3F2FD)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color(0xFF1565C0),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Shizuku 服务已连接",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF1565C0),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+        else -> {
+            DaemonSetupCard(
+                adbCommand = adbCommand,
+                onCopyCommand = onCopyCommand,
+                isLimited = dataSource == "usagestats" || dataSource == "system" || dataSource == "self"
+            )
+        }
+    }
+}
+
+@Composable
+private fun DaemonSetupCard(
+    adbCommand: String,
+    onCopyCommand: () -> Unit,
+    isLimited: Boolean
+) {
+    var copied by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isLimited) MaterialTheme.colorScheme.errorContainer
+            else MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = if (isLimited) MaterialTheme.colorScheme.onErrorContainer
+                    else MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isLimited) "数据不完整" else "一键启动",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (isLimited) MaterialTheme.colorScheme.onErrorContainer
+                    else MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (isLimited) {
+                Text(
+                    text = "无法获取其他应用的实时 CPU/内存数据。请通过电脑连接手机，执行以下命令启动本地守护进程（无需安装额外 App）：",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            } else {
+                Text(
+                    text = "只需执行一次以下 ADB 命令即可查看所有应用的真实 CPU 和内存数据（手机重启后需重新执行）：",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.Black.copy(alpha = 0.06f)
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = adbCommand,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = if (isLimited) MaterialTheme.colorScheme.onErrorContainer
+                        else MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState())
+                    )
+                    IconButton(
+                        onClick = {
+                            onCopyCommand()
+                            copied = true
+                        },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "复制命令",
+                            tint = if (copied) Color(0xFF2E7D32)
+                            else (if (isLimited) MaterialTheme.colorScheme.onErrorContainer
+                            else MaterialTheme.colorScheme.onPrimaryContainer),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            if (copied) {
+                Text(
+                    text = "✓ 已复制到剪贴板",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF2E7D32)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "💡 使用方法：手机通过 USB 连接电脑，在终端中粘贴执行该命令后返回此页面即可看到完整数据。",
+                style = MaterialTheme.typography.bodySmall,
+                color = (if (isLimited) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onPrimaryContainer).copy(alpha = 0.7f)
+            )
         }
     }
 }
@@ -140,6 +355,30 @@ private fun PermissionCard(onGrantClick: () -> Unit) {
                 Text("去授权")
             }
         }
+    }
+}
+
+@Composable
+fun AppIcon(packageName: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val icon = remember(packageName) {
+        try {
+            context.packageManager.getApplicationIcon(packageName).toBitmap().asImageBitmap()
+        } catch (e: Exception) { null }
+    }
+    if (icon != null) {
+        Image(bitmap = icon, contentDescription = null, modifier = modifier.clip(RoundedCornerShape(8.dp)))
+    } else {
+        Box(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)))
+    }
+}
+
+fun formatMemorySize(bytes: Long): String {
+    return when {
+        bytes >= 1_073_741_824 -> "%.1f GB".format(bytes / 1_073_741_824.0)
+        bytes >= 1_048_576 -> "%.0f MB".format(bytes / 1_048_576.0)
+        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
     }
 }
 
@@ -263,7 +502,6 @@ private fun AppResourceCard(snapshot: AppResourceSnapshot, onClick: () -> Unit) 
         snapshot.cpuPercent > 20 -> Color(0xFFFFA000)
         else -> Color(0xFF388E3C)
     }
-    val memMb = snapshot.memoryBytes / 1_000_000f
 
     Card(
         modifier = Modifier
@@ -277,9 +515,16 @@ private fun AppResourceCard(snapshot: AppResourceSnapshot, onClick: () -> Unit) 
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(text = snapshot.appName, style = MaterialTheme.typography.bodyLarge)
-                    Text(text = snapshot.packageName, style = MaterialTheme.typography.labelSmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AppIcon(
+                        packageName = snapshot.packageName,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(text = snapshot.appName, style = MaterialTheme.typography.bodyLarge)
+                        Text(text = snapshot.packageName, style = MaterialTheme.typography.labelSmall)
+                    }
                 }
                 Box(
                     modifier = Modifier
@@ -300,7 +545,8 @@ private fun AppResourceCard(snapshot: AppResourceSnapshot, onClick: () -> Unit) 
             Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 LinearProgressIndicator(
                     progress = { (snapshot.cpuPercent / 100f).coerceIn(0f, 1f) },
@@ -310,7 +556,7 @@ private fun AppResourceCard(snapshot: AppResourceSnapshot, onClick: () -> Unit) 
                     color = cpuColor
                 )
                 Spacer(modifier = Modifier.width(16.dp))
-                Text(text = "%.1f MB".format(memMb), style = MaterialTheme.typography.bodyMedium)
+                Text(text = formatMemorySize(snapshot.memoryBytes), style = MaterialTheme.typography.bodyMedium)
             }
         }
     }

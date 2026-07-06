@@ -47,6 +47,9 @@ interface ResourceSampleDao {
 
     @Query("DELETE FROM resource_sample WHERE timestamp < :cutoff")
     suspend fun deleteOlderThan(cutoff: Long)
+
+    @Query("DELETE FROM resource_sample")
+    suspend fun deleteAll()
 }
 
 data class SampleWithAppInfo(

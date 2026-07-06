@@ -1,6 +1,7 @@
 package com.example.heatradar.core.monitor
 
 import android.util.Log
+import com.example.heatradar.core.common.SettingsManager
 import com.example.heatradar.core.database.DeviceStateEntity
 import com.example.heatradar.core.database.HeatRadarRepository
 import com.example.heatradar.core.database.ResourceSampleEntity
@@ -9,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -21,7 +23,8 @@ class RealSampler @Inject constructor(
     private val appInfoProvider: AppInfoProvider,
     private val processScanner: ProcessScanner,
     private val deviceStateProvider: DeviceStateProvider,
-    private val foregroundAppProvider: ForegroundAppProvider
+    private val foregroundAppProvider: ForegroundAppProvider,
+    private val settingsManager: SettingsManager
 ) {
 
     private val TAG = "RealSampler"
@@ -88,7 +91,8 @@ class RealSampler @Inject constructor(
 
     private suspend fun sampleOnce() {
         val now = System.currentTimeMillis()
-        val processes = processScanner.scanAllProcesses()
+        val showSystem = settingsManager.settings.first().showSystemProcesses
+        val processes = processScanner.scanAllProcesses(showSystemProcesses = showSystem)
 
         if (processes.isEmpty()) {
             Log.w(TAG, "sampleOnce: no processes found")

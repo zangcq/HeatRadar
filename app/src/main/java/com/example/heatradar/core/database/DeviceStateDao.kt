@@ -18,4 +18,7 @@ interface DeviceStateDao {
 
     @Query("DELETE FROM device_state WHERE timestamp < :cutoff")
     suspend fun deleteOlderThan(cutoff: Long)
+
+    @Query("DELETE FROM device_state")
+    suspend fun deleteAll()
 }

@@ -54,7 +54,7 @@ class ProcessScanner @Inject constructor(
 
     fun getCurrentDataSource(): String = currentDataSource
 
-    fun scanAllProcesses(): List<RunningProcess> {
+    fun scanAllProcesses(showSystemProcesses: Boolean = false): List<RunningProcess> {
         val t0 = System.currentTimeMillis()
 
         daemonManager.ensureScriptReady()
@@ -62,7 +62,7 @@ class ProcessScanner @Inject constructor(
         val daemonReady = daemonManager.isTopOutputAvailable()
         shizukuManager.ensureBound(context)
         val shizukuReady = shizukuManager.isAvailable() && shizukuManager.isConnected()
-        Log.i(TAG, "scanAllProcesses: daemonReady=$daemonReady shizukuReady=$shizukuReady")
+        Log.i(TAG, "scanAllProcesses: daemonReady=$daemonReady shizukuReady=$shizukuReady showSystem=$showSystemProcesses")
 
         val results = when {
             daemonReady -> {
@@ -83,14 +83,16 @@ class ProcessScanner @Inject constructor(
             }
         }
 
-        if (results.isEmpty()) {
-            addOwnProcess(results)
+        val filtered = if (showSystemProcesses) results else filterOutSystemProcesses(results)
+
+        if (filtered.isEmpty()) {
+            addOwnProcess(filtered)
         }
 
         val t1 = System.currentTimeMillis()
-        Log.i(TAG, "scanAllProcesses: ${results.size} apps in ${t1 - t0}ms (source=$currentDataSource)")
-        if (results.isNotEmpty()) {
-            val topByCpu = results.values.sortedByDescending { it.cpuPercent }.take(8)
+        Log.i(TAG, "scanAllProcesses: ${filtered.size} apps in ${t1 - t0}ms (source=$currentDataSource)")
+        if (filtered.isNotEmpty()) {
+            val topByCpu = filtered.values.sortedByDescending { it.cpuPercent }.take(8)
             Log.i(TAG, "  Top by CPU:")
             topByCpu.forEach {
                 Log.i(TAG, "    ${it.packageName} cpu=%.1f%% mem=%dKB pid=%d [%s]".format(
@@ -98,7 +100,18 @@ class ProcessScanner @Inject constructor(
             }
         }
 
-        return results.values.sortedByDescending { it.cpuPercent * 1024f + it.memoryKb }
+        return filtered.values.sortedByDescending { it.cpuPercent * 1024f + it.memoryKb }
+    }
+
+    private fun filterOutSystemProcesses(results: MutableMap<String, RunningProcess>): MutableMap<String, RunningProcess> {
+        val filtered = mutableMapOf<String, RunningProcess>()
+        for ((pkg, proc) in results) {
+            if (isSystemApp(pkg) && proc.cpuPercent < 1f && proc.memoryKb < 50 * 1024) {
+                continue
+            }
+            filtered[pkg] = proc
+        }
+        return filtered
     }
 
     private fun normalizeCpuPercent(rawPercent: Float): Float {
@@ -132,6 +145,9 @@ class ProcessScanner @Inject constructor(
 
     private fun scanViaShizuku(): MutableMap<String, RunningProcess> {
         val results = mutableMapOf<String, RunningProcess>()
+        val cpuSums = mutableMapOf<String, Float>()
+        val memMaxs = mutableMapOf<String, Long>()
+        val pidMaps = mutableMapOf<String, Int>()
         try {
             val output = shizukuManager.executeCommandWithRetry("top -n 1 -b -q -o PID,USER,%CPU,RSS,NAME")
             if (output.isNullOrBlank()) {
@@ -153,18 +169,24 @@ class ProcessScanner @Inject constructor(
                 if (basePkg !in knownPackages) continue
 
                 val normalizedCpu = normalizeCpuPercent(parsed.cpuPercent)
-                val existing = results[basePkg]
-                if (existing == null || parsed.memoryKb > existing.memoryKb) {
-                    results[basePkg] = RunningProcess(
-                        pid = parsed.pid,
-                        packageName = basePkg,
-                        appName = getAppName(basePkg),
-                        memoryKb = parsed.memoryKb,
-                        cpuPercent = normalizedCpu,
-                        isVisibleToSystem = true,
-                        dataSource = "shizuku"
-                    )
+                cpuSums[basePkg] = (cpuSums[basePkg] ?: 0f) + normalizedCpu
+                val existingMem = memMaxs[basePkg] ?: 0L
+                if (parsed.memoryKb > existingMem) {
+                    memMaxs[basePkg] = parsed.memoryKb
+                    pidMaps[basePkg] = parsed.pid
                 }
+            }
+
+            for (basePkg in cpuSums.keys) {
+                results[basePkg] = RunningProcess(
+                    pid = pidMaps[basePkg] ?: 0,
+                    packageName = basePkg,
+                    appName = getAppName(basePkg),
+                    memoryKb = memMaxs[basePkg] ?: 0L,
+                    cpuPercent = (cpuSums[basePkg] ?: 0f).coerceIn(0f, 100f),
+                    isVisibleToSystem = true,
+                    dataSource = "shizuku"
+                )
             }
 
             if (results.isNotEmpty()) {
@@ -179,6 +201,9 @@ class ProcessScanner @Inject constructor(
 
     private fun scanViaDaemon(): MutableMap<String, RunningProcess> {
         val results = mutableMapOf<String, RunningProcess>()
+        val cpuSums = mutableMapOf<String, Float>()
+        val memMaxs = mutableMapOf<String, Long>()
+        val pidMaps = mutableMapOf<String, Int>()
         try {
             val output = daemonManager.readTopOutput()
             if (output.isNullOrBlank()) {
@@ -201,18 +226,24 @@ class ProcessScanner @Inject constructor(
                 if (basePkg !in knownPackages) continue
 
                 val normalizedCpu = normalizeCpuPercent(parsed.cpuPercent)
-                val existing = results[basePkg]
-                if (existing == null || parsed.memoryKb > existing.memoryKb) {
-                    results[basePkg] = RunningProcess(
-                        pid = parsed.pid,
-                        packageName = basePkg,
-                        appName = getAppName(basePkg),
-                        memoryKb = parsed.memoryKb,
-                        cpuPercent = normalizedCpu,
-                        isVisibleToSystem = true,
-                        dataSource = "daemon"
-                    )
+                cpuSums[basePkg] = (cpuSums[basePkg] ?: 0f) + normalizedCpu
+                val existingMem = memMaxs[basePkg] ?: 0L
+                if (parsed.memoryKb > existingMem) {
+                    memMaxs[basePkg] = parsed.memoryKb
+                    pidMaps[basePkg] = parsed.pid
                 }
+            }
+
+            for (basePkg in cpuSums.keys) {
+                results[basePkg] = RunningProcess(
+                    pid = pidMaps[basePkg] ?: 0,
+                    packageName = basePkg,
+                    appName = getAppName(basePkg),
+                    memoryKb = memMaxs[basePkg] ?: 0L,
+                    cpuPercent = (cpuSums[basePkg] ?: 0f).coerceIn(0f, 100f),
+                    isVisibleToSystem = true,
+                    dataSource = "daemon"
+                )
             }
 
             if (results.isNotEmpty()) {

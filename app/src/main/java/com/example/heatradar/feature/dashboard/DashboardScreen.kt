@@ -23,8 +23,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
@@ -36,6 +38,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -43,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,6 +65,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.heatradar.R
 import com.example.heatradar.core.common.AppResourceSnapshot
 import com.example.heatradar.core.common.DeviceStateSnapshot
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,6 +80,7 @@ fun DashboardScreen(
     val hasUsagePermission by viewModel.hasUsagePermission.collectAsStateWithLifecycle()
     val dataSource by viewModel.dataSource.collectAsStateWithLifecycle()
     val daemonStatus by viewModel.daemonStatus.collectAsStateWithLifecycle()
+    val showSystem by viewModel.showSystemProcesses.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         viewModel.refreshPermission()
@@ -121,11 +128,34 @@ fun DashboardScreen(
             item { DeviceStateCard(uiState.deviceState) }
 
             item {
-                Text(
-                    text = "应用资源占用",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "应用资源占用",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable { viewModel.toggleShowSystemProcesses() }
+                    ) {
+                        Text(
+                            text = "系统进程",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (showSystem) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Switch(
+                            checked = showSystem,
+                            onCheckedChange = { viewModel.toggleShowSystemProcesses() },
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                }
             }
 
             items(uiState.cpuTop, key = { it.packageName }) { snapshot ->
@@ -361,13 +391,15 @@ private fun PermissionCard(onGrantClick: () -> Unit) {
 @Composable
 fun AppIcon(packageName: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val icon = remember(packageName) {
-        try {
-            context.packageManager.getApplicationIcon(packageName).toBitmap().asImageBitmap()
-        } catch (e: Exception) { null }
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, key1 = packageName) {
+        value = withContext(Dispatchers.IO) {
+            try {
+                context.packageManager.getApplicationIcon(packageName).toBitmap()
+            } catch (e: Exception) { null }
+        }
     }
-    if (icon != null) {
-        Image(bitmap = icon, contentDescription = null, modifier = modifier.clip(RoundedCornerShape(8.dp)))
+    if (bitmap != null) {
+        Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = null, modifier = modifier.clip(RoundedCornerShape(8.dp)))
     } else {
         Box(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)))
     }

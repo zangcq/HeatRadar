@@ -16,4 +16,7 @@ interface AnomalyEventDao {
 
     @Query("DELETE FROM anomaly_event WHERE timestamp < :cutoff")
     suspend fun deleteOlderThan(cutoff: Long)
+
+    @Query("DELETE FROM anomaly_event")
+    suspend fun deleteAll()
 }

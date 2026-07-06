@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.heatradar.core.common.SettingsManager
 import com.example.heatradar.core.database.HeatRadarRepository
 import com.example.heatradar.core.monitor.DaemonManager
 import com.example.heatradar.core.monitor.DaemonStatus
@@ -34,6 +35,7 @@ class DashboardViewModel @Inject constructor(
     private val processScanner: ProcessScanner,
     private val shizukuManager: ShizukuServiceManager,
     private val daemonManager: DaemonManager,
+    private val settingsManager: SettingsManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -49,6 +51,12 @@ class DashboardViewModel @Inject constructor(
     private val _scriptDeployed = MutableStateFlow(false)
     val scriptDeployed: StateFlow<Boolean> = _scriptDeployed.asStateFlow()
 
+    val showSystemProcesses: StateFlow<Boolean> = MutableStateFlow(false).apply {
+        viewModelScope.launch {
+            settingsManager.settings.collect { value = it.showSystemProcesses }
+        }
+    }.asStateFlow()
+
     val daemonAdbCommand: String
         get() = daemonManager.adbStartCommand
 
@@ -60,7 +68,7 @@ class DashboardViewModel @Inject constructor(
         repository.observeLatestDeviceState()
     ) { samples, deviceState ->
         DashboardUiState(
-            cpuTop = samples.sortedByDescending { it.cpuPercent }.take(10),
+            cpuTop = samples.sortedByDescending { it.cpuPercent }.take(15),
             memoryTop = samples.sortedByDescending { it.memoryBytes }.take(5),
             deviceState = deviceState,
             isLoading = false
@@ -111,6 +119,13 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
+    fun toggleShowSystemProcesses() {
+        viewModelScope.launch {
+            val current = showSystemProcesses.value
+            settingsManager.setShowSystemProcesses(!current)
+        }
+    }
+
     fun copyDaemonCommand() {
         val cmd = daemonManager.adbStartCommand
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -121,6 +136,14 @@ class DashboardViewModel @Inject constructor(
         val cmd = daemonManager.adbStopCommand
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("ADB Stop Command", cmd))
+    }
+
+    fun stopDaemon() {
+        viewModelScope.launch {
+            daemonManager.requestStop()
+            delay(500)
+            _daemonStatus.value = daemonManager.getDaemonStatus()
+        }
     }
 
     fun openUsageAccessSettings() {

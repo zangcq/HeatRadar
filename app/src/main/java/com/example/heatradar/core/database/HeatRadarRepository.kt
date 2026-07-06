@@ -17,6 +17,7 @@ interface HeatRadarRepository {
     suspend fun getAppInfo(packageName: String): AppInfoEntity?
     suspend fun getLatestSample(packageName: String): ResourceSampleEntity?
     suspend fun cleanupOldData()
+    suspend fun clearAllData()
 }
 
 @Singleton
@@ -77,6 +78,12 @@ class DefaultHeatRadarRepository @Inject constructor(
         resourceSampleDao.deleteOlderThan(cutoff)
         deviceStateDao.deleteOlderThan(cutoff)
         anomalyEventDao.deleteOlderThan(cutoff)
+    }
+
+    override suspend fun clearAllData() {
+        resourceSampleDao.deleteAll()
+        deviceStateDao.deleteAll()
+        anomalyEventDao.deleteAll()
     }
 }
 

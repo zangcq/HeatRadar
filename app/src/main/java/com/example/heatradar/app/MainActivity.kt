@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -31,7 +30,6 @@ import com.example.heatradar.core.ui.theme.HeatRadarTheme
 import com.example.heatradar.feature.appdetail.AppDetailScreen
 import com.example.heatradar.feature.dashboard.DashboardScreen
 import com.example.heatradar.feature.settings.SettingsScreen
-import com.example.heatradar.feature.trends.TrendsScreen
 import dagger.hilt.android.AndroidEntryPoint
 
 sealed class Screen(val route: String, val labelRes: Int, val icon: @Composable () -> Unit) {
@@ -39,12 +37,6 @@ sealed class Screen(val route: String, val labelRes: Int, val icon: @Composable 
         route = "dashboard",
         labelRes = R.string.title_dashboard,
         icon = { Icon(Icons.Default.Home, contentDescription = null) }
-    )
-
-    data object Trends : Screen(
-        route = "trends",
-        labelRes = R.string.title_trends,
-        icon = { Icon(Icons.Default.TrendingUp, contentDescription = null) }
     )
 
     data object Settings : Screen(
@@ -72,7 +64,7 @@ fun HeatRadarApp() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
-    val bottomRoutes = listOf(Screen.Dashboard.route, Screen.Trends.route, Screen.Settings.route)
+    val bottomRoutes = listOf(Screen.Dashboard.route, Screen.Settings.route)
     val showBottomBar = currentDestination?.route in bottomRoutes
 
     Scaffold(
@@ -91,7 +83,7 @@ fun HeatRadarApp() {
 
 @Composable
 fun HeatRadarBottomBar(navController: NavController, currentRoute: String?) {
-    val items = listOf(Screen.Dashboard, Screen.Trends, Screen.Settings)
+    val items = listOf(Screen.Dashboard, Screen.Settings)
 
     NavigationBar {
         items.forEach { screen ->
@@ -129,7 +121,6 @@ fun HeatRadarNavHost(
                 onAppClick = { packageName ->
                     navController.navigate("appDetail/$packageName")
                 },
-                onNavigateToTrends = { navController.navigate(Screen.Trends.route) },
                 onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
             )
         }
@@ -137,14 +128,11 @@ fun HeatRadarNavHost(
             route = "appDetail/{packageName}",
             arguments = listOf(navArgument("packageName") { type = NavType.StringType })
         ) { backStackEntry ->
-            val packageName = backStackEntry.arguments?.getString("packageName") ?: ""
+            val packageName = backStackEntry?.arguments?.getString("packageName") ?: ""
             AppDetailScreen(
                 packageName = packageName,
                 onNavigateBack = { navController.popBackStack() }
             )
-        }
-        composable(Screen.Trends.route) {
-            TrendsScreen()
         }
         composable(Screen.Settings.route) {
             SettingsScreen()

@@ -27,18 +27,18 @@ import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -72,7 +72,6 @@ import kotlinx.coroutines.withContext
 @Composable
 fun DashboardScreen(
     onAppClick: (String) -> Unit,
-    onNavigateToTrends: () -> Unit,
     onNavigateToSettings: () -> Unit,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
@@ -92,9 +91,6 @@ fun DashboardScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.title_dashboard)) },
                 actions = {
-                    IconButton(onClick = onNavigateToTrends) {
-                        Icon(Icons.Default.TrendingUp, contentDescription = "趋势")
-                    }
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "设置")
                     }
@@ -138,23 +134,24 @@ fun DashboardScreen(
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.clickable { viewModel.toggleShowSystemProcesses() }
-                    ) {
-                        Text(
-                            text = "系统进程",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (showSystem) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Switch(
-                            checked = showSystem,
-                            onCheckedChange = { viewModel.toggleShowSystemProcesses() },
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
+                    FilterChip(
+                        selected = showSystem,
+                        onClick = { viewModel.toggleShowSystemProcesses() },
+                        label = {
+                            Text(
+                                text = "系统",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = null,
+                                modifier = Modifier.size(FilterChipDefaults.IconSize)
+                            )
+                        },
+                        modifier = Modifier.height(28.dp)
+                    )
                 }
             }
 

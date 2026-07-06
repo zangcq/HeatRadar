@@ -3,7 +3,6 @@
     <string name="app_name">HeatRadar</string>
     <string name="title_dashboard">热源雷达</string>
     <string name="title_app_detail">应用详情</string>
-    <string name="title_trends">趋势</string>
     <string name="title_settings">设置</string>
     <string name="cpu_top">CPU Top</string>
     <string name="memory_top">内存 Top</string>

@@ -1,6 +1,7 @@
 package com.example.heatradar.core.monitor
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -55,9 +57,8 @@ fun MonitorTheme(content: @Composable () -> Unit) {
 @Composable
 fun FloatingOverlayContent(
     state: MonitorState,
-    minWidth: Int,
-    maxWidth: Int,
     onClose: () -> Unit = {},
+    onDrag: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     MonitorTheme {
@@ -72,26 +73,41 @@ fun FloatingOverlayContent(
                 modifier = Modifier.padding(8.dp)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                onDrag(dragAmount.x, dragAmount.y)
+                            }
+                        },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "HeatRadar",
-                        color = Color(0xFFFF6D00),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "HeatRadar",
+                            color = Color(0xFFFF6D00),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "⋮⋮",
+                            color = Color.White.copy(alpha = 0.3f),
+                            fontSize = 12.sp
+                        )
+                    }
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
+                            .size(28.dp)
                             .clickable { onClose() },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = "×",
                             color = Color.White.copy(alpha = 0.6f),
-                            fontSize = 18.sp,
+                            fontSize = 20.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }

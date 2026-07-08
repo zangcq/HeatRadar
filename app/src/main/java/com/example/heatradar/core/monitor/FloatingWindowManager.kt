@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.util.Log
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.compose.runtime.collectAsState
@@ -22,7 +21,6 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 class FloatingWindowManager(
@@ -33,12 +31,6 @@ class FloatingWindowManager(
     private var floatingView: View? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var isShowing = false
-
-    private var initialX: Int = 0
-    private var initialY: Int = 0
-    private var initialTouchX: Float = 0f
-    private var initialTouchY: Float = 0f
-    private var isDragging = false
 
     private val lifecycleOwner = FloatingLifecycleOwner()
 
@@ -80,15 +72,10 @@ class FloatingWindowManager(
                 val state by MonitorService.monitorState.collectAsState()
                 FloatingOverlayContent(
                     state = state,
-                    minWidth = dpToPx(276),
-                    maxWidth = dpToPx(300),
-                    onClose = onClose
+                    onClose = onClose,
+                    onDrag = { dx, dy -> updatePosition(dx, dy) }
                 )
             }
-        }
-
-        composeView.setOnTouchListener { _, event ->
-            handleTouch(event, params)
         }
 
         try {
@@ -102,6 +89,18 @@ class FloatingWindowManager(
             lifecycleOwner.onPause()
             lifecycleOwner.onStop()
             lifecycleOwner.onDestroy()
+        }
+    }
+
+    private fun updatePosition(dx: Float, dy: Float) {
+        val view = floatingView ?: return
+        val params = layoutParams ?: return
+        params.x += dx.toInt()
+        params.y += dy.toInt()
+        try {
+            windowManager.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            Log.e("FloatingWindow", "Failed to update position", e)
         }
     }
 
@@ -124,44 +123,6 @@ class FloatingWindowManager(
     }
 
     fun isShowing(): Boolean = isShowing
-
-    private fun handleTouch(event: MotionEvent, params: WindowManager.LayoutParams): Boolean {
-        when (event.action) {
-            MotionEvent.ACTION_DOWN -> {
-                initialX = params.x
-                initialY = params.y
-                initialTouchX = event.rawX
-                initialTouchY = event.rawY
-                isDragging = false
-                return false
-            }
-            MotionEvent.ACTION_MOVE -> {
-                val dx = event.rawX - initialTouchX
-                val dy = event.rawY - initialTouchY
-                if (!isDragging && (abs(dx) > 10 || abs(dy) > 10)) {
-                    isDragging = true
-                }
-                if (isDragging) {
-                    params.x = initialX + dx.toInt()
-                    params.y = initialY + dy.toInt()
-                    floatingView?.let { view ->
-                        try { windowManager.updateViewLayout(view, params) } catch (_: Exception) {}
-                    }
-                    return true
-                }
-                return false
-            }
-            MotionEvent.ACTION_UP -> {
-                return if (isDragging) {
-                    isDragging = false
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-        return false
-    }
 
     private fun dpToPx(dp: Int): Int {
         val density = context.resources.displayMetrics.density

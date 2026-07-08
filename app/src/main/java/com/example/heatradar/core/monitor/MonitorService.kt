@@ -7,10 +7,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.heatradar.R
 import com.example.heatradar.app.MainActivity
@@ -61,8 +61,10 @@ class MonitorService : Service() {
     private lateinit var serviceScope: CoroutineScope
     private var samplingJob: Job? = null
     private var floatingWindowManager: FloatingWindowManager? = null
+    private var isForegroundStarted = false
 
     companion object {
+        private const val TAG = "MonitorService"
         private const val CHANNEL_ID = "monitor_channel"
         private const val NOTIFICATION_ID = 1001
         const val ACTION_STOP = "com.example.heatradar.ACTION_STOP_MONITOR"
@@ -109,14 +111,11 @@ class MonitorService : Service() {
                 context.startService(intent)
             }
         }
-
-        fun isServiceRunning(): Boolean {
-            return _monitorState.value.topApps.isNotEmpty() || _monitorState.value.cpuPercent > 0f
-        }
     }
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "onCreate")
         windowManager = getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         createNotificationChannel()
@@ -129,19 +128,21 @@ class MonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand action=${intent?.action} showFloating=${intent?.getBooleanExtra(EXTRA_SHOW_FLOATING, false)}")
+
         if (intent?.action == ACTION_STOP) {
             hideFloatingWindow()
             stopSelf()
             return START_NOT_STICKY
         }
 
+        ensureForeground()
+
         if (intent?.action == ACTION_HIDE_FLOATING) {
             hideFloatingWindow()
             return START_STICKY
         }
 
-        val notification = createNotification()
-        startForeground(NOTIFICATION_ID, notification)
         if (samplingJob == null || samplingJob?.isActive != true) {
             startSamplingLoop()
         }
@@ -154,24 +155,37 @@ class MonitorService : Service() {
         return START_STICKY
     }
 
+    private fun ensureForeground() {
+        if (!isForegroundStarted) {
+            val notification = createNotification()
+            startForeground(NOTIFICATION_ID, notification)
+            isForegroundStarted = true
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        Log.d(TAG, "onDestroy")
         samplingJob?.cancel()
         serviceScope.cancel()
         hideFloatingWindow()
         floatingWindowManager = null
+        isForegroundStarted = false
+        _monitorState.value = MonitorState()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
     fun showFloatingWindow() {
+        Log.d(TAG, "showFloatingWindow hasPermission=${hasOverlayPermission()}")
         if (hasOverlayPermission()) {
             floatingWindowManager?.show()
         }
     }
 
     fun hideFloatingWindow() {
+        Log.d(TAG, "hideFloatingWindow")
         floatingWindowManager?.hide()
     }
 
@@ -254,7 +268,7 @@ class MonitorService : Service() {
                         topApps = topApps
                     )
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    Log.e(TAG, "Sampling error", e)
                 }
                 delay(2000)
             }

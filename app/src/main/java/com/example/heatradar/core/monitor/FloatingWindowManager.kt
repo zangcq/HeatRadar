@@ -2,6 +2,7 @@ package com.example.heatradar.core.monitor
 
 import android.content.Context
 import android.graphics.PixelFormat
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -29,9 +30,13 @@ class FloatingWindowManager(
     private var isDragging = false
 
     fun show() {
-        if (isShowing) return
+        if (isShowing) {
+            Log.d("FloatingWindow", "Already showing, skipping")
+            return
+        }
 
-        val minWidthPx = dpToPx(220)
+        val widthPx = dpToPx(276)
+        val marginPx = dpToPx(16)
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -42,7 +47,7 @@ class FloatingWindowManager(
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = getScreenWidth() - minWidthPx - dpToPx(8)
+            x = marginPx
             y = dpToPx(100)
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
@@ -54,8 +59,8 @@ class FloatingWindowManager(
                 val state by MonitorService.monitorState.collectAsState()
                 FloatingOverlayContent(
                     state = state,
-                    minWidth = minWidthPx,
-                    maxWidth = dpToPx(280),
+                    minWidth = widthPx,
+                    maxWidth = dpToPx(300),
                     onClose = onClose
                 )
             }
@@ -65,16 +70,26 @@ class FloatingWindowManager(
             handleTouch(event, params)
         }
 
-        windowManager.addView(composeView, params)
-        floatingView = composeView
-        layoutParams = params
-        isShowing = true
+        try {
+            windowManager.addView(composeView, params)
+            floatingView = composeView
+            layoutParams = params
+            isShowing = true
+            Log.d("FloatingWindow", "Floating window added successfully at (${params.x}, ${params.y})")
+        } catch (e: Exception) {
+            Log.e("FloatingWindow", "Failed to add floating window", e)
+        }
     }
 
     fun hide() {
         if (!isShowing) return
         floatingView?.let {
-            try { windowManager.removeView(it) } catch (_: Exception) {}
+            try {
+                windowManager.removeView(it)
+                Log.d("FloatingWindow", "Floating window removed")
+            } catch (e: Exception) {
+                Log.e("FloatingWindow", "Failed to remove floating window", e)
+            }
         }
         floatingView = null
         layoutParams = null

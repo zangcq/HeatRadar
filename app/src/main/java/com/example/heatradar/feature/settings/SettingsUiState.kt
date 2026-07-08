@@ -12,5 +12,6 @@ data class SettingsUiState(
     val foregroundMonitorEnabled: Boolean = false,
     val isExporting: Boolean = false,
     val hasOverlayPermission: Boolean = false,
+    val hasNotificationPermission: Boolean = true,
     val monitorRunning: Boolean = false
 )

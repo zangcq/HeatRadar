@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.heatradar.core.common.ReportExporter
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -56,6 +58,7 @@ class SettingsViewModel @Inject constructor(
             foregroundMonitorEnabled = settings.foregroundMonitorEnabled,
             isExporting = exporting,
             hasOverlayPermission = hasOverlayPermission(),
+            hasNotificationPermission = hasNotificationPermission(),
             monitorRunning = monitorState.topApps.isNotEmpty() || monitorState.cpuPercent > 0f
         )
     }.stateIn(
@@ -68,6 +71,40 @@ class SettingsViewModel @Inject constructor(
 
     init {
         startDaemonPolling()
+        restoreMonitorIfNeeded()
+    }
+
+    private fun restoreMonitorIfNeeded() {
+        viewModelScope.launch {
+            delay(500)
+            val settings = settingsManager.settings.first()
+            if (settings.foregroundMonitorEnabled) {
+                val showFloating = settings.floatingWindowEnabled && hasOverlayPermission()
+                MonitorService.start(context, showFloating = showFloating)
+            }
+        }
+    }
+
+    fun onResume() {
+        viewModelScope.launch {
+            delay(200)
+            val settings = settingsManager.settings.first()
+            val hasPerm = hasOverlayPermission()
+            val running = MonitorService.monitorState.value.topApps.isNotEmpty() ||
+                    MonitorService.monitorState.value.cpuPercent > 0f
+
+            if (settings.floatingWindowEnabled && hasPerm && !running) {
+                settingsManager.setForegroundMonitor(true)
+                MonitorService.start(context, showFloating = true)
+            } else if (settings.floatingWindowEnabled && hasPerm && running) {
+                MonitorService.showFloating(context)
+            } else if (!hasPerm && settings.floatingWindowEnabled) {
+                settingsManager.setFloatingWindow(false)
+                if (settings.foregroundMonitorEnabled) {
+                    MonitorService.start(context, showFloating = false)
+                }
+            }
+        }
     }
 
     private fun startDaemonPolling() {
@@ -130,6 +167,17 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun hasNotificationPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
     fun requestOverlayPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
             val intent = Intent(
@@ -146,20 +194,23 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val current = uiState.value.floatingWindowEnabled
             val newValue = !current
-            settingsManager.setFloatingWindow(newValue)
 
             if (newValue) {
                 if (!hasOverlayPermission()) {
                     requestOverlayPermission()
                     return@launch
                 }
-                if (!uiState.value.monitorRunning) {
+                settingsManager.setFloatingWindow(true)
+                val running = MonitorService.monitorState.value.topApps.isNotEmpty() ||
+                        MonitorService.monitorState.value.cpuPercent > 0f
+                if (!running) {
                     settingsManager.setForegroundMonitor(true)
                     MonitorService.start(context, showFloating = true)
                 } else {
                     MonitorService.showFloating(context)
                 }
             } else {
+                settingsManager.setFloatingWindow(false)
                 MonitorService.hideFloating(context)
             }
         }

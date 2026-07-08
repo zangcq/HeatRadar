@@ -11,6 +11,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -29,13 +40,14 @@ class FloatingWindowManager(
     private var initialTouchY: Float = 0f
     private var isDragging = false
 
+    private val lifecycleOwner = FloatingLifecycleOwner()
+
     fun show() {
         if (isShowing) {
             Log.d("FloatingWindow", "Already showing, skipping")
             return
         }
 
-        val widthPx = dpToPx(276)
         val marginPx = dpToPx(16)
 
         val params = WindowManager.LayoutParams(
@@ -53,13 +65,22 @@ class FloatingWindowManager(
             height = WindowManager.LayoutParams.WRAP_CONTENT
         }
 
+        lifecycleOwner.onCreate()
+        lifecycleOwner.onStart()
+        lifecycleOwner.onResume()
+
         val composeView = ComposeView(context).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+
             setContent {
                 val state by MonitorService.monitorState.collectAsState()
                 FloatingOverlayContent(
                     state = state,
-                    minWidth = widthPx,
+                    minWidth = dpToPx(276),
                     maxWidth = dpToPx(300),
                     onClose = onClose
                 )
@@ -78,6 +99,9 @@ class FloatingWindowManager(
             Log.d("FloatingWindow", "Floating window added successfully at (${params.x}, ${params.y})")
         } catch (e: Exception) {
             Log.e("FloatingWindow", "Failed to add floating window", e)
+            lifecycleOwner.onPause()
+            lifecycleOwner.onStop()
+            lifecycleOwner.onDestroy()
         }
     }
 
@@ -91,6 +115,9 @@ class FloatingWindowManager(
                 Log.e("FloatingWindow", "Failed to remove floating window", e)
             }
         }
+        lifecycleOwner.onPause()
+        lifecycleOwner.onStop()
+        lifecycleOwner.onDestroy()
         floatingView = null
         layoutParams = null
         isShowing = false
@@ -140,8 +167,44 @@ class FloatingWindowManager(
         val density = context.resources.displayMetrics.density
         return (dp * density).roundToInt()
     }
+}
 
-    private fun getScreenWidth(): Int {
-        return context.resources.displayMetrics.widthPixels
+private class FloatingLifecycleOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
+    private val lifecycleRegistry = LifecycleRegistry(this)
+    private val savedStateRegistryController = SavedStateRegistryController.create(this)
+    private val store = ViewModelStore()
+
+    init {
+        lifecycleRegistry.currentState = Lifecycle.State.INITIALIZED
+        savedStateRegistryController.performRestore(null)
+    }
+
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
+    override val viewModelStore: ViewModelStore get() = store
+    override val savedStateRegistry: SavedStateRegistry get() = savedStateRegistryController.savedStateRegistry
+
+    fun onCreate() {
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
+    }
+
+    fun onStart() {
+        lifecycleRegistry.currentState = Lifecycle.State.STARTED
+    }
+
+    fun onResume() {
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+    }
+
+    fun onPause() {
+        lifecycleRegistry.currentState = Lifecycle.State.STARTED
+    }
+
+    fun onStop() {
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
+    }
+
+    fun onDestroy() {
+        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        store.clear()
     }
 }

@@ -1,5 +1,6 @@
 package com.example.heatradar.feature.settings
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,9 +14,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -27,10 +32,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -42,6 +49,20 @@ import com.example.heatradar.R
 @Composable
 fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val exportUri by viewModel.exportUri.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    LaunchedEffect(exportUri) {
+        exportUri?.let { uri ->
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = if (uri.toString().endsWith(".csv")) "text/csv" else "text/html"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(intent, "分享报告"))
+            viewModel.clearExportUri()
+        }
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text(stringResource(R.string.title_settings)) }) }
@@ -54,6 +75,135 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFFFFF3E0)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "V2 专业版",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE65100)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "PRO",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            modifier = Modifier
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "悬浮窗监控",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            SettingsSwitchItem(
+                title = "显示悬浮窗",
+                subtitle = if (uiState.hasOverlayPermission) "在屏幕上实时显示设备状态" else "需要悬浮窗权限",
+                checked = uiState.floatingWindowEnabled,
+                onCheckedChange = { viewModel.toggleFloatingWindow() }
+            )
+            if (!uiState.hasOverlayPermission) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFF57C00)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "需要悬浮窗权限才能显示悬浮窗",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFE65100),
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { viewModel.requestOverlayPermission() }) {
+                            Text("去授权")
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "前台监控",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            SettingsSwitchItem(
+                title = if (uiState.monitorRunning) "持续监控运行中" else "持续监控",
+                subtitle = "保持服务在后台持续采集数据（通知栏常驻）",
+                checked = uiState.foregroundMonitorEnabled,
+                onCheckedChange = { viewModel.toggleForegroundMonitor() }
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "报告导出",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "导出最近24小时监控报告",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "生成包含设备状态趋势、应用资源排行的分析报告",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.exportHtmlReport() },
+                            enabled = !uiState.isExporting
+                        ) {
+                            if (uiState.isExporting) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.width(16.dp).height(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                            } else {
+                                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.padding(end = 4.dp))
+                            }
+                            Text("HTML 报告")
+                        }
+                        OutlinedButton(
+                            onClick = { viewModel.exportCsvReport() },
+                            enabled = !uiState.isExporting
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.padding(end = 4.dp))
+                            Text("CSV 数据")
+                        }
+                    }
+                }
+            }
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(

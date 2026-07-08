@@ -6,4 +6,24 @@
     <string name="title_settings">设置</string>
     <string name="cpu_top">CPU Top</string>
     <string name="memory_top">内存 Top</string>
+
+    <string name="monitor_notification_channel_name">实时监控</string>
+    <string name="monitor_notification_channel_desc">悬浮窗和后台监控运行状态</string>
+    <string name="monitor_notification_title">HeatRadar 监控中</string>
+    <string name="monitor_notification_text">实时监控设备状态中</string>
+
+    <string name="pro_section">专业版功能</string>
+    <string name="floating_window">悬浮窗监控</string>
+    <string name="floating_window_desc">在屏幕上层实时显示 CPU/内存/温度/发热元凶</string>
+    <string name="foreground_monitor">后台持续监控</string>
+    <string name="foreground_monitor_desc">切换到其他应用时仍持续采集数据</string>
+    <string name="export_report">导出监控报告</string>
+    <string name="export_report_desc">导出最近 24 小时数据为 HTML/CSV 报告</string>
+    <string name="start_monitor">开启监控</string>
+    <string name="stop_monitor">停止监控</string>
+    <string name="export_html">导出 HTML 报告</string>
+    <string name="export_csv">导出 CSV 数据</string>
+    <string name="report_generated">报告已生成，可分享</string>
+    <string name="need_overlay_permission">需要悬浮窗权限</string>
+    <string name="grant_permission">授予权限</string>
 </resources>

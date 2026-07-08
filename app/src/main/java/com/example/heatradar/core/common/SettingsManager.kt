@@ -18,7 +18,9 @@ data class AppSettings(
     val highFrequencySampling: Boolean = false,
     val longDataRetention: Boolean = false,
     val anomalyAlerts: Boolean = true,
-    val showSystemProcesses: Boolean = false
+    val showSystemProcesses: Boolean = false,
+    val floatingWindowEnabled: Boolean = false,
+    val foregroundMonitorEnabled: Boolean = false
 )
 
 @Singleton
@@ -30,6 +32,8 @@ class SettingsManager @Inject constructor(
         val LONG_RETENTION = booleanPreferencesKey("long_retention")
         val ANOMALY_ALERTS = booleanPreferencesKey("anomaly_alerts")
         val SHOW_SYSTEM = booleanPreferencesKey("show_system_processes")
+        val FLOATING_WINDOW = booleanPreferencesKey("floating_window")
+        val FOREGROUND_MONITOR = booleanPreferencesKey("foreground_monitor")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -37,7 +41,9 @@ class SettingsManager @Inject constructor(
             highFrequencySampling = prefs[Keys.HIGH_FREQ] ?: false,
             longDataRetention = prefs[Keys.LONG_RETENTION] ?: false,
             anomalyAlerts = prefs[Keys.ANOMALY_ALERTS] ?: true,
-            showSystemProcesses = prefs[Keys.SHOW_SYSTEM] ?: false
+            showSystemProcesses = prefs[Keys.SHOW_SYSTEM] ?: false,
+            floatingWindowEnabled = prefs[Keys.FLOATING_WINDOW] ?: false,
+            foregroundMonitorEnabled = prefs[Keys.FOREGROUND_MONITOR] ?: false
         )
     }
 
@@ -55,5 +61,13 @@ class SettingsManager @Inject constructor(
 
     suspend fun setShowSystemProcesses(enabled: Boolean) {
         context.dataStore.edit { it[Keys.SHOW_SYSTEM] = enabled }
+    }
+
+    suspend fun setFloatingWindow(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.FLOATING_WINDOW] = enabled }
+    }
+
+    suspend fun setForegroundMonitor(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.FOREGROUND_MONITOR] = enabled }
     }
 }

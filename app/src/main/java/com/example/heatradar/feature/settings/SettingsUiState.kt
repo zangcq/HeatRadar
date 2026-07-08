@@ -7,5 +7,10 @@ data class SettingsUiState(
     val longDataRetention: Boolean = false,
     val anomalyAlerts: Boolean = true,
     val showSystemProcesses: Boolean = false,
-    val daemonStatus: DaemonStatus = DaemonStatus.NOT_RUNNING
+    val daemonStatus: DaemonStatus = DaemonStatus.NOT_RUNNING,
+    val floatingWindowEnabled: Boolean = false,
+    val foregroundMonitorEnabled: Boolean = false,
+    val isExporting: Boolean = false,
+    val hasOverlayPermission: Boolean = false,
+    val monitorRunning: Boolean = false
 )

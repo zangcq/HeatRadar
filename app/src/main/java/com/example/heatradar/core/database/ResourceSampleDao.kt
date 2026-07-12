@@ -11,6 +11,9 @@ interface ResourceSampleDao {
     @Insert
     suspend fun insert(sample: ResourceSampleEntity)
 
+    @Insert
+    suspend fun insertAll(samples: List<ResourceSampleEntity>)
+
     @Query("SELECT * FROM resource_sample ORDER BY timestamp DESC")
     fun observeAll(): Flow<List<ResourceSampleEntity>>
 

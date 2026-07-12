@@ -16,7 +16,12 @@ data class DeviceState(
     val totalMemoryBytes: Long,
     val availableMemoryBytes: Long,
     val usedMemoryBytes: Long,
-    val memoryUsagePercent: Float
+    val memoryUsagePercent: Float,
+    val cpuFreqsMhz: List<Long> = emptyList(),
+    val gpuBusyPercent: Float = 0f,
+    val gpuFreqMhz: Long = 0L,
+    val batteryTempCelsius: Float = 0f,
+    val allTemps: List<ThermalZone> = emptyList()
 ) {
     companion object {
         val EMPTY = DeviceState(
@@ -35,24 +40,78 @@ data class DeviceState(
 @Singleton
 class DeviceStateProvider @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val cpuSampler: CpuSampler
+    private val metricsHolder: SystemMetricsHolder
 ) {
 
-    private val TAG = "DeviceStateProvider"
+    companion object {
+        private const val TAG = "DeviceStateProvider"
+        private const val FREQ_CACHE_TTL_MS = 10_000L
+        private const val TEMP_CACHE_TTL_MS = 5_000L
+        private const val DAEMON_DATA_TTL_MS = 5_000L
+    }
+
+    private var cachedMaxFreq: Long? = null
+    private var cachedCpuCount: Int? = null
+    private var lastFreqReadTime: Long = 0L
+    private var cachedAvgFreq: Long = 0L
+    private var lastTempReadTime: Long = 0L
+    private var cachedTemp: Float = 0f
+
+    private val am by lazy { context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager }
 
     fun getDeviceState(): DeviceState {
-        val cpuFreqs = readCpuFrequencies()
-        val maxFreq = readMaxCpuFreq()
-        val temp = readTemperature()
+        val snapshot = metricsHolder.getSnapshot()
+        val daemonFresh = snapshot.available &&
+                (System.currentTimeMillis() - snapshot.timestamp) < DAEMON_DATA_TTL_MS &&
+                snapshot.temps.isNotEmpty()
+
+        return if (daemonFresh) {
+            getDeviceStateFromSnapshot(snapshot)
+        } else {
+            getDeviceStateFallback()
+        }
+    }
+
+    private fun getDeviceStateFromSnapshot(s: SystemMetricsSnapshot): DeviceState {
+        val mem = s.memory
+        val totalMemBytes = mem.memTotalKb * 1024L
+        val usedMemBytes = mem.usedKb * 1024L
+        val availMemBytes = mem.memAvailableKb * 1024L
+        val memPercent = mem.usedPercent
+        val avgFreqMhz = s.avgCpuFreqMhz
+        val maxFreqMhz = maxOf(s.maxCpuFreqMhz, getMaxCpuFreqCached())
+        val cpuTemp = s.maxCpuTempCelsius.toFloat()
+        val battTemp = s.batteryTempCelsius.toFloat()
+
+        return DeviceState(
+            totalCpuFreqMhz = avgFreqMhz,
+            maxCpuFreqMhz = maxFreqMhz,
+            cpuUsagePercent = s.totalCpuPercent,
+            temperatureCelsius = if (cpuTemp > 0f) cpuTemp else s.temps.maxOfOrNull { it.tempCelsius.toFloat() } ?: 0f,
+            totalMemoryBytes = totalMemBytes,
+            availableMemoryBytes = availMemBytes,
+            usedMemoryBytes = usedMemBytes,
+            memoryUsagePercent = memPercent,
+            cpuFreqsMhz = s.cpuFreqsKhz.map { it / 1000 },
+            gpuBusyPercent = s.gpu.gpuBusyPercent,
+            gpuFreqMhz = s.gpu.gpuClkMhz,
+            batteryTempCelsius = battTemp,
+            allTemps = s.temps
+        )
+    }
+
+    private fun getDeviceStateFallback(): DeviceState {
+        val cpuFreqs = readCpuFrequenciesCached()
+        val maxFreq = getMaxCpuFreq()
+        val temp = readTemperatureCached()
         val memory = readMemory()
-        val cpuUsage = cpuSampler.getSystemCpuPercent()
 
         val usedMem = memory.first - memory.second
         val memPercent = if (memory.first > 0) {
             usedMem.toFloat() / memory.first * 100f
         } else 0f
 
-        Log.d(TAG, "getDeviceState: cpu=$cpuUsage% mem=$memPercent% temp=$temp°C")
+        val cpuUsage = metricsHolder.getTotalCpuPercent()
 
         return DeviceState(
             totalCpuFreqMhz = cpuFreqs,
@@ -62,15 +121,57 @@ class DeviceStateProvider @Inject constructor(
             totalMemoryBytes = memory.first,
             availableMemoryBytes = memory.second,
             usedMemoryBytes = usedMem,
-            memoryUsagePercent = memPercent
+            memoryUsagePercent = memPercent,
+            cpuFreqsMhz = if (cpuFreqs > 0) List(getCpuCoreCount()) { cpuFreqs } else emptyList()
         )
+    }
+
+    private fun getMaxCpuFreqCached(): Long {
+        return cachedMaxFreq ?: getMaxCpuFreq()
+    }
+
+    private fun getCpuCoreCount(): Int {
+        cachedCpuCount?.let { return it }
+        val count = (Runtime.getRuntime().availableProcessors()).coerceAtMost(16)
+        cachedCpuCount = count
+        return count
+    }
+
+    private fun getMaxCpuFreq(): Long {
+        cachedMaxFreq?.let { return it }
+        return try {
+            var max = 0L
+            for (i in 0 until getCpuCoreCount()) {
+                val path = "/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq"
+                val file = File(path)
+                if (file.exists()) {
+                    val khz = file.readText().trim().toLongOrNull() ?: continue
+                    val mhz = khz / 1000
+                    if (mhz > max) max = mhz
+                }
+            }
+            cachedMaxFreq = max
+            max
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    private fun readCpuFrequenciesCached(): Long {
+        val now = System.currentTimeMillis()
+        if (now - lastFreqReadTime < FREQ_CACHE_TTL_MS) {
+            return cachedAvgFreq
+        }
+        lastFreqReadTime = now
+        cachedAvgFreq = readCpuFrequencies()
+        return cachedAvgFreq
     }
 
     private fun readCpuFrequencies(): Long {
         return try {
             var total = 0L
             var count = 0
-            for (i in 0..15) {
+            for (i in 0 until getCpuCoreCount()) {
                 val path = "/sys/devices/system/cpu/cpu$i/cpufreq/scaling_cur_freq"
                 val file = File(path)
                 if (file.exists()) {
@@ -81,46 +182,27 @@ class DeviceStateProvider @Inject constructor(
             }
             if (count > 0) total / count else 0L
         } catch (e: Exception) {
-            Log.e(TAG, "readCpuFrequencies failed", e)
             0L
         }
     }
 
-    private fun readMaxCpuFreq(): Long {
-        return try {
-            var max = 0L
-            for (i in 0..15) {
-                val path = "/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq"
-                val file = File(path)
-                if (file.exists()) {
-                    val khz = file.readText().trim().toLongOrNull() ?: continue
-                    val mhz = khz / 1000
-                    if (mhz > max) max = mhz
-                }
-            }
-            max
-        } catch (e: Exception) {
-            Log.e(TAG, "readMaxCpuFreq failed", e)
-            0L
+    private fun readTemperatureCached(): Float {
+        val now = System.currentTimeMillis()
+        if (now - lastTempReadTime < TEMP_CACHE_TTL_MS) {
+            return cachedTemp
         }
+        lastTempReadTime = now
+        cachedTemp = readTemperature()
+        return cachedTemp
     }
 
     private fun readTemperature(): Float {
         return try {
-            val paths = listOf(
-                "/sys/class/thermal/thermal_zone0/temp",
-                "/sys/class/thermal/thermal_zone1/temp",
-                "/sys/class/thermal/thermal_zone2/temp",
-                "/sys/class/thermal/thermal_zone3/temp",
-                "/sys/class/thermal/thermal_zone4/temp",
-                "/sys/class/thermal/thermal_zone5/temp",
-                "/sys/class/thermal/thermal_zone6/temp",
-                "/sys/class/thermal/thermal_zone7/temp",
-                "/sys/class/thermal/thermal_zone8/temp",
-                "/sys/class/thermal/thermal_zone9/temp",
-                "/sys/devices/virtual/thermal/thermal_zone0/temp",
-                "/sys/devices/virtual/thermal/thermal_zone1/temp"
-            )
+            val paths = (0..11).map { "/sys/class/thermal/thermal_zone$it/temp" } +
+                listOf(
+                    "/sys/devices/virtual/thermal/thermal_zone0/temp",
+                    "/sys/devices/virtual/thermal/thermal_zone1/temp"
+                )
             var maxTemp = 0f
             for (path in paths) {
                 val file = File(path)
@@ -135,14 +217,18 @@ class DeviceStateProvider @Inject constructor(
             }
             maxTemp
         } catch (e: Exception) {
-            Log.e(TAG, "readTemperature failed", e)
             0f
         }
     }
 
     private fun readMemory(): Pair<Long, Long> {
         return try {
-            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val snapshot = metricsHolder.getSnapshot()
+            if (snapshot.memory.memTotalKb > 0) {
+                val totalBytes = snapshot.memory.memTotalKb * 1024L
+                val availBytes = snapshot.memory.memAvailableKb * 1024L
+                if (totalBytes > 0) return Pair(totalBytes, availBytes)
+            }
             val mi = ActivityManager.MemoryInfo()
             am.getMemoryInfo(mi)
             Pair(mi.totalMem, mi.availMem)

@@ -10,6 +10,7 @@ import javax.inject.Singleton
 interface HeatRadarRepository {
     suspend fun insertAppInfo(apps: List<AppInfoEntity>)
     suspend fun insertSample(sample: ResourceSampleEntity)
+    suspend fun insertAllSamples(samples: List<ResourceSampleEntity>)
     suspend fun insertEvent(event: AnomalyEventEntity)
     suspend fun insertDeviceState(state: DeviceStateEntity)
     fun observeLatestSamples(): Flow<List<AppResourceSnapshot>>
@@ -34,6 +35,12 @@ class DefaultHeatRadarRepository @Inject constructor(
 
     override suspend fun insertSample(sample: ResourceSampleEntity) {
         resourceSampleDao.insert(sample)
+    }
+
+    override suspend fun insertAllSamples(samples: List<ResourceSampleEntity>) {
+        if (samples.isNotEmpty()) {
+            resourceSampleDao.insertAll(samples)
+        }
     }
 
     override suspend fun insertEvent(event: AnomalyEventEntity) {

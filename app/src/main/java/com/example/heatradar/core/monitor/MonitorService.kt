@@ -14,6 +14,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.heatradar.R
 import com.example.heatradar.app.MainActivity
+import com.example.heatradar.core.database.DeviceStateEntity
+import com.example.heatradar.core.database.HeatRadarRepository
+import com.example.heatradar.core.database.ResourceSampleEntity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 data class TopAppInfo(
@@ -38,10 +42,18 @@ data class TopAppInfo(
 data class MonitorState(
     val cpuPercent: Float = 0f,
     val cpuFreqMhz: Long = 0L,
+    val maxCpuFreqMhz: Long = 0L,
+    val cpuFreqsMhz: List<Long> = emptyList(),
     val memPercent: Float = 0f,
     val memUsedMb: Long = 0L,
     val memTotalMb: Long = 0L,
+    val memAvailableMb: Long = 0L,
+    val memCachedMb: Long = 0L,
     val tempCelsius: Float = 0f,
+    val batteryTempCelsius: Float = 0f,
+    val gpuPercent: Float = 0f,
+    val gpuFreqMhz: Long = 0L,
+    val allTemps: List<ThermalZone> = emptyList(),
     val topApps: List<TopAppInfo> = emptyList()
 )
 
@@ -55,13 +67,23 @@ class MonitorService : Service() {
     lateinit var deviceStateProvider: DeviceStateProvider
 
     @Inject
+    lateinit var metricsHolder: SystemMetricsHolder
+
+    @Inject
     lateinit var settingsManager: com.example.heatradar.core.common.SettingsManager
+
+    @Inject
+    lateinit var repository: HeatRadarRepository
+
+    @Inject
+    lateinit var foregroundAppProvider: ForegroundAppProvider
 
     private lateinit var windowManager: android.view.WindowManager
     private lateinit var serviceScope: CoroutineScope
     private var samplingJob: Job? = null
     private var floatingWindowManager: FloatingWindowManager? = null
     private var isForegroundStarted = false
+    private var dbSampleCount = 0
 
     companion object {
         private const val TAG = "MonitorService"
@@ -70,6 +92,12 @@ class MonitorService : Service() {
         const val ACTION_STOP = "com.example.heatradar.ACTION_STOP_MONITOR"
         const val ACTION_HIDE_FLOATING = "com.example.heatradar.ACTION_HIDE_FLOATING"
         const val EXTRA_SHOW_FLOATING = "show_floating"
+
+        private const val DB_WRITE_INTERVAL_SAMPLES = 3
+
+        private val isRunning = AtomicBoolean(false)
+
+        fun isServiceRunning(): Boolean = isRunning.get()
 
         private val _monitorState = MutableStateFlow(MonitorState())
         val monitorState: StateFlow<MonitorState> = _monitorState.asStateFlow()
@@ -86,8 +114,7 @@ class MonitorService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, MonitorService::class.java)
-            context.stopService(intent)
+            context.stopService(Intent(context, MonitorService::class.java))
         }
 
         fun hideFloating(context: Context) {
@@ -115,7 +142,7 @@ class MonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "onCreate")
+        isRunning.set(true)
         windowManager = getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         createNotificationChannel()
@@ -128,8 +155,6 @@ class MonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand action=${intent?.action} showFloating=${intent?.getBooleanExtra(EXTRA_SHOW_FLOATING, false)}")
-
         if (intent?.action == ACTION_STOP) {
             hideFloatingWindow()
             stopSelf()
@@ -166,7 +191,7 @@ class MonitorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        Log.d(TAG, "onDestroy")
+        isRunning.set(false)
         samplingJob?.cancel()
         serviceScope.cancel()
         hideFloatingWindow()
@@ -178,14 +203,12 @@ class MonitorService : Service() {
     }
 
     fun showFloatingWindow() {
-        Log.d(TAG, "showFloatingWindow hasPermission=${hasOverlayPermission()}")
         if (hasOverlayPermission()) {
             floatingWindowManager?.show()
         }
     }
 
     fun hideFloatingWindow() {
-        Log.d(TAG, "hideFloatingWindow")
         floatingWindowManager?.hide()
     }
 
@@ -244,6 +267,7 @@ class MonitorService : Service() {
     private fun startSamplingLoop() {
         samplingJob?.cancel()
         samplingJob = serviceScope.launch {
+            var lastState = MonitorState()
             while (isActive) {
                 try {
                     val processes = processScanner.scanAllProcesses(showSystemProcesses = false)
@@ -258,20 +282,85 @@ class MonitorService : Service() {
                         )
                     }
 
-                    _monitorState.value = MonitorState(
+                    val snapshot = metricsHolder.getSnapshot()
+                    val newState = MonitorState(
                         cpuPercent = deviceState.cpuUsagePercent,
                         cpuFreqMhz = deviceState.totalCpuFreqMhz,
+                        maxCpuFreqMhz = deviceState.maxCpuFreqMhz,
+                        cpuFreqsMhz = deviceState.cpuFreqsMhz,
                         memPercent = deviceState.memoryUsagePercent,
                         memUsedMb = deviceState.usedMemoryBytes / (1024 * 1024),
                         memTotalMb = deviceState.totalMemoryBytes / (1024 * 1024),
+                        memAvailableMb = deviceState.availableMemoryBytes / (1024 * 1024),
+                        memCachedMb = snapshot.memory.cachedKb / 1024,
                         tempCelsius = deviceState.temperatureCelsius,
+                        batteryTempCelsius = deviceState.batteryTempCelsius,
+                        gpuPercent = deviceState.gpuBusyPercent,
+                        gpuFreqMhz = deviceState.gpuFreqMhz,
+                        allTemps = deviceState.allTemps,
                         topApps = topApps
                     )
+
+                    if (stateChanged(lastState, newState)) {
+                        _monitorState.value = newState
+                        lastState = newState
+                    }
+
+                    dbSampleCount++
+                    if (dbSampleCount >= DB_WRITE_INTERVAL_SAMPLES) {
+                        dbSampleCount = 0
+                        writeToDatabase(processes, deviceState)
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Sampling error", e)
                 }
                 delay(2000)
             }
+        }
+    }
+
+    private fun stateChanged(old: MonitorState, new: MonitorState): Boolean {
+        if (kotlin.math.abs(old.cpuPercent - new.cpuPercent) > 0.5f) return true
+        if (kotlin.math.abs(old.memPercent - new.memPercent) > 0.3f) return true
+        if (kotlin.math.abs(old.tempCelsius - new.tempCelsius) > 0.5f) return true
+        if (old.topApps.size != new.topApps.size) return true
+        for (i in old.topApps.indices) {
+            if (old.topApps[i].packageName != new.topApps[i].packageName ||
+                kotlin.math.abs(old.topApps[i].cpuPercent - new.topApps[i].cpuPercent) > 0.5f) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private suspend fun writeToDatabase(processes: List<RunningProcess>, deviceState: DeviceState) {
+        try {
+            val now = System.currentTimeMillis()
+            val samples = processes.map { proc ->
+                ResourceSampleEntity(
+                    packageName = proc.packageName,
+                    timestamp = now,
+                    cpuPercent = proc.cpuPercent.coerceIn(0f, 100f),
+                    memoryBytes = proc.memoryKb * 1024L,
+                    activeMinutes = proc.foregroundMinutes
+                )
+            }
+            repository.insertAllSamples(samples)
+
+            val foreground = foregroundAppProvider.getForegroundPackageName()
+            repository.insertDeviceState(DeviceStateEntity(
+                timestamp = now,
+                cpuFreqMhz = deviceState.totalCpuFreqMhz,
+                maxCpuFreqMhz = deviceState.maxCpuFreqMhz,
+                cpuUsagePercent = deviceState.cpuUsagePercent,
+                temperatureCelsius = deviceState.temperatureCelsius,
+                totalMemoryBytes = deviceState.totalMemoryBytes,
+                usedMemoryBytes = deviceState.usedMemoryBytes,
+                memoryUsagePercent = deviceState.memoryUsagePercent,
+                foregroundPackageName = foreground
+            ))
+        } catch (e: Exception) {
+            Log.e(TAG, "writeToDatabase failed", e)
         }
     }
 }

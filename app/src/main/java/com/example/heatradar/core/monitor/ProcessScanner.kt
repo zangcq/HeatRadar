@@ -6,6 +6,7 @@ import android.app.usage.UsageStats
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
+import android.os.Build
 import android.os.Process
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -29,14 +30,14 @@ data class RunningProcess(
 class ProcessScanner @Inject constructor(
     @ApplicationContext private val context: Context,
     private val shizukuManager: ShizukuServiceManager,
-    private val daemonManager: DaemonManager
+    private val daemonManager: DaemonManager,
+    private val metricsHolder: SystemMetricsHolder
 ) {
 
     companion object {
-        private const val PACKAGE_CACHE_TTL_MS = 5 * 60 * 1000L
+        private const val TAG = "ProcessScanner"
+        private const val PACKAGE_CACHE_TTL_MS = 30 * 60 * 1000L
     }
-
-    private val TAG = "ProcessScanner"
 
     private val pm = context.packageManager
     private val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -51,6 +52,8 @@ class ProcessScanner @Inject constructor(
     private var cachedKnownPackagesTime: Long = 0L
 
     private var currentDataSource: String = "unknown"
+    private var logCount = 0
+    private var lastTopOutputLogged: Long = 0
 
     fun getCurrentDataSource(): String = currentDataSource
 
@@ -62,23 +65,33 @@ class ProcessScanner @Inject constructor(
         val daemonReady = daemonManager.isTopOutputAvailable()
         shizukuManager.ensureBound(context)
         val shizukuReady = shizukuManager.isAvailable() && shizukuManager.isConnected()
-        Log.i(TAG, "scanAllProcesses: daemonReady=$daemonReady shizukuReady=$shizukuReady showSystem=$showSystemProcesses")
+
+        if (logCount < 3 || logCount % 15 == 0) {
+            Log.i(TAG, "scanAllProcesses: daemonReady=$daemonReady shizukuReady=$shizukuReady showSystem=$showSystemProcesses")
+        }
 
         val results = when {
             daemonReady -> {
                 val daemonResult = scanViaDaemon()
                 if (daemonResult.isNotEmpty()) daemonResult else {
-                    if (shizukuReady) scanViaShizuku() else scanViaUsageStats()
+                    if (shizukuReady) scanViaShizuku() else {
+                        metricsHolder.sampleCpuFromProc()
+                        scanViaUsageStats()
+                    }
                 }
             }
             shizukuReady -> {
                 val shizukuResult = scanViaShizuku()
-                if (shizukuResult.isNotEmpty()) shizukuResult else scanViaUsageStats()
+                if (shizukuResult.isNotEmpty()) shizukuResult else {
+                    metricsHolder.sampleCpuFromProc()
+                    scanViaUsageStats()
+                }
             }
             else -> {
                 if (shizukuManager.needsPermission()) {
                     shizukuManager.requestPermission()
                 }
+                metricsHolder.sampleCpuFromProc()
                 scanViaUsageStats()
             }
         }
@@ -90,13 +103,16 @@ class ProcessScanner @Inject constructor(
         }
 
         val t1 = System.currentTimeMillis()
-        Log.i(TAG, "scanAllProcesses: ${filtered.size} apps in ${t1 - t0}ms (source=$currentDataSource)")
-        if (filtered.isNotEmpty()) {
-            val topByCpu = filtered.values.sortedByDescending { it.cpuPercent }.take(8)
-            Log.i(TAG, "  Top by CPU:")
-            topByCpu.forEach {
-                Log.i(TAG, "    ${it.packageName} cpu=%.1f%% mem=%dKB pid=%d [%s]".format(
-                    it.cpuPercent, it.memoryKb, it.pid, it.dataSource))
+        logCount++
+        if (logCount < 5 || logCount % 10 == 0) {
+            val cpuSnapshot = metricsHolder.getSnapshot()
+            Log.i(TAG, "scanAllProcesses: ${filtered.size} apps in ${t1 - t0}ms (source=$currentDataSource) cpu=%.1f%% avail=%s".format(
+                cpuSnapshot.totalCpuPercent, cpuSnapshot.available))
+            if (filtered.isNotEmpty() && logCount < 5) {
+                val topByCpu = filtered.values.sortedByDescending { it.cpuPercent }.take(5)
+                topByCpu.forEach {
+                    Log.i(TAG, "  ${it.packageName} cpu=%.1f%% mem=%dKB".format(it.cpuPercent, it.memoryKb))
+                }
             }
         }
 
@@ -115,7 +131,8 @@ class ProcessScanner @Inject constructor(
     }
 
     private fun normalizeCpuPercent(rawPercent: Float): Float {
-        val normalized = rawPercent / cpuCoreCount.toFloat()
+        val effectiveCores = metricsHolder.getCpuCoreCount().coerceAtLeast(1)
+        val normalized = rawPercent / effectiveCores.toFloat()
         return max(0f, min(100f, normalized))
     }
 
@@ -135,9 +152,11 @@ class ProcessScanner @Inject constructor(
     private fun hasUsageStatsPermission(): Boolean {
         return try {
             val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
-            appOps.checkOpNoThrow(
-                AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
-            ) == AppOpsManager.MODE_ALLOWED
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                appOps.checkOpNoThrow(
+                    AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName
+                ) == AppOpsManager.MODE_ALLOWED
+            } else false
         } catch (e: Exception) {
             false
         }
@@ -151,11 +170,10 @@ class ProcessScanner @Inject constructor(
         try {
             val output = shizukuManager.executeCommandWithRetry("top -n 1 -b -q -o PID,USER,%CPU,RSS,NAME")
             if (output.isNullOrBlank()) {
-                Log.w(TAG, "scanViaShizuku: empty output")
                 return results
             }
 
-            Log.i(TAG, "scanViaShizuku: top output length=${output.length}")
+            parseTopCpuHeader(output)
 
             val knownPackages = getKnownPackages()
 
@@ -192,7 +210,6 @@ class ProcessScanner @Inject constructor(
             if (results.isNotEmpty()) {
                 currentDataSource = "shizuku"
             }
-            Log.i(TAG, "scanViaShizuku: parsed ${results.size} app processes")
         } catch (e: Exception) {
             Log.e(TAG, "scanViaShizuku failed", e)
         }
@@ -207,12 +224,17 @@ class ProcessScanner @Inject constructor(
         try {
             val output = daemonManager.readTopOutput()
             if (output.isNullOrBlank()) {
-                Log.w(TAG, "scanViaDaemon: empty output")
                 return results
             }
 
             val status = daemonManager.getDaemonStatus()
-            Log.i(TAG, "scanViaDaemon: output length=${output.length}, pid=${status.pid}, age=${status.outputFileAgeMs}ms")
+            val now = System.currentTimeMillis()
+            if (now - lastTopOutputLogged > 30_000L || logCount < 3) {
+                Log.d(TAG, "scanViaDaemon: output length=${output.length}, pid=${status.pid}, age=${status.outputFileAgeMs}ms")
+                Log.d(TAG, "scanViaDaemon: first 300 chars: ${output.take(300)}")
+                lastTopOutputLogged = now
+            }
+            parseTopCpuHeader(output)
 
             val knownPackages = getKnownPackages()
 
@@ -249,11 +271,125 @@ class ProcessScanner @Inject constructor(
             if (results.isNotEmpty()) {
                 currentDataSource = "daemon"
             }
-            Log.i(TAG, "scanViaDaemon: parsed ${results.size} app processes")
         } catch (e: Exception) {
             Log.e(TAG, "scanViaDaemon failed", e)
         }
         return results
+    }
+
+    private fun parseTopCpuHeader(output: String): SystemMetricsSnapshot? {
+        return try {
+            var totalCpu = 0f
+            var cores = cpuCoreCount
+            var cpuFreqs: List<Long> = emptyList()
+            var temps: List<ThermalZone> = emptyList()
+            var memory = MemoryInfo()
+            var gpu = GpuInfo()
+            var foundCpu = false
+
+            for (line in output.lines()) {
+                val trimmed = line.trim()
+
+                val hrCpuMatch = Regex("^HR_CPU\\s+total=(\\d+(?:\\.\\d+)?)%\\s+cores=(\\d+)").find(trimmed)
+                if (hrCpuMatch != null) {
+                    totalCpu = hrCpuMatch.groupValues[1].toFloatOrNull() ?: 0f
+                    cores = (hrCpuMatch.groupValues[2].toIntOrNull() ?: cpuCoreCount).coerceAtLeast(1)
+                    foundCpu = true
+                    continue
+                }
+
+                if (trimmed.startsWith("HR_TEMP")) {
+                    temps = parseTemps(trimmed.removePrefix("HR_TEMP").trim())
+                    continue
+                }
+
+                if (trimmed.startsWith("HR_FREQ")) {
+                    cpuFreqs = parseFreqs(trimmed.removePrefix("HR_FREQ").trim())
+                    continue
+                }
+
+                if (trimmed.startsWith("HR_MEM")) {
+                    memory = parseMemory(trimmed.removePrefix("HR_MEM").trim())
+                    continue
+                }
+
+                if (trimmed.startsWith("HR_GPU")) {
+                    gpu = parseGpu(trimmed.removePrefix("HR_GPU").trim())
+                    continue
+                }
+            }
+
+            if (foundCpu) {
+                if (logCount < 5) {
+                    Log.i(TAG, "parseTopCpuHeader: cpu=%.1f%% cores=%d temps=%d freqs=%d memTotal=%dMB gpu=%.0f%%".format(
+                        totalCpu, cores, temps.size, cpuFreqs.size, memory.totalMb, gpu.gpuBusyPercent))
+                }
+                metricsHolder.updateFromDaemon(
+                    totalCpu = totalCpu,
+                    cores = cores,
+                    cpuFreqsKhz = cpuFreqs,
+                    temps = temps,
+                    memory = memory,
+                    gpu = gpu
+                )
+                metricsHolder.getSnapshot()
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "parseTopCpuHeader failed", e)
+            null
+        }
+    }
+
+    private fun parseTemps(text: String): List<ThermalZone> {
+        val zones = mutableListOf<ThermalZone>()
+        val regex = Regex("([\\w\\-]+)=(-?\\d+)")
+        for (match in regex.findAll(text)) {
+            val type = match.groupValues[1]
+            val temp = match.groupValues[2].toIntOrNull() ?: continue
+            if (temp in -40..200) {
+                zones.add(ThermalZone(type, temp))
+            }
+        }
+        return zones
+    }
+
+    private fun parseFreqs(text: String): List<Long> {
+        return text.trim().split(Regex("\\s+"))
+            .mapNotNull { it.toLongOrNull() }
+            .filter { it > 0 }
+    }
+
+    private fun parseMemory(text: String): MemoryInfo {
+        val map = mutableMapOf<String, Long>()
+        val regex = Regex("(\\w+)=(\\d+)")
+        for (match in regex.findAll(text)) {
+            map[match.groupValues[1]] = match.groupValues[2].toLongOrNull() ?: 0L
+        }
+        return MemoryInfo(
+            memTotalKb = map["MemTotal"] ?: 0L,
+            memFreeKb = map["MemFree"] ?: 0L,
+            memAvailableKb = map["MemAvailable"] ?: 0L,
+            cachedKb = map["Cached"] ?: 0L,
+            buffersKb = map["Buffers"] ?: 0L,
+            swapTotalKb = map["SwapTotal"] ?: 0L,
+            swapFreeKb = map["SwapFree"] ?: 0L,
+            swapCachedKb = map["SwapCached"] ?: 0L
+        )
+    }
+
+    private fun parseGpu(text: String): GpuInfo {
+        var busy = 0f
+        var clk = 0L
+        val regex = Regex("(\\w+)=([\\d.]+)")
+        for (match in regex.findAll(text)) {
+            when (match.groupValues[1]) {
+                "gpu_busy" -> busy = match.groupValues[2].toFloatOrNull() ?: 0f
+                "gpu_clk" -> clk = match.groupValues[2].toLongOrNull() ?: 0L
+            }
+        }
+        return GpuInfo(gpuBusyPercent = busy.coerceIn(0f, 100f), gpuClkHz = clk)
     }
 
     private data class TopEntry(
@@ -267,7 +403,13 @@ class ProcessScanner @Inject constructor(
     private fun parseTopLine(line: String): TopEntry? {
         val trimmed = line.trim()
         if (trimmed.isEmpty() || trimmed.startsWith("PID")) return null
-        if (trimmed.startsWith("Load") || trimmed.startsWith("CPU")) return null
+        if (trimmed.startsWith("Load") || trimmed.startsWith("CPU") ||
+            trimmed.startsWith("Tasks") || trimmed.startsWith("Mem") ||
+            trimmed.startsWith("Swap")) return null
+        if (trimmed.startsWith("HR_CPU") || trimmed.startsWith("HR_TEMP") ||
+            trimmed.startsWith("HR_FREQ") || trimmed.startsWith("HR_MEM") ||
+            trimmed.startsWith("HR_GPU")) return null
+        if (trimmed.contains("%cpu") || trimmed.contains("cpu%")) return null
 
         val parts = trimmed.split(Regex("\\s+"))
         if (parts.size < 5) return null

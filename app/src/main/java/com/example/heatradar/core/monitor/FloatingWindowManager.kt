@@ -1,13 +1,16 @@
 package com.example.heatradar.core.monitor
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.PixelFormat
 import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.Lifecycle
@@ -31,16 +34,31 @@ class FloatingWindowManager(
     private var floatingView: View? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var isShowing = false
+    private val isCollapsed: MutableState<Boolean> = mutableStateOf(false)
+    private var currentAnimator: ValueAnimator? = null
 
     private val lifecycleOwner = FloatingLifecycleOwner()
 
+    private var screenWidth: Int = 0
+    private var screenHeight: Int = 0
+    private val marginPx: Int by lazy { dpToPx(8) }
+    private val edgePaddingPx: Int by lazy { dpToPx(4) }
+    private val expandedWidthPx: Int by lazy { dpToPx(260) }
+    private val collapsedSizePx: Int by lazy { dpToPx(44) }
+
+    private fun updateScreenSize() {
+        val metrics = context.resources.displayMetrics
+        screenWidth = metrics.widthPixels
+        screenHeight = metrics.heightPixels
+    }
+
     fun show() {
         if (isShowing) {
-            Log.d("FloatingWindow", "Already showing, skipping")
+            expand()
             return
         }
 
-        val marginPx = dpToPx(16)
+        updateScreenSize()
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -72,8 +90,12 @@ class FloatingWindowManager(
                 val state by MonitorService.monitorState.collectAsState()
                 FloatingOverlayContent(
                     state = state,
+                    isCollapsed = isCollapsed.value,
                     onClose = onClose,
-                    onDrag = { dx, dy -> updatePosition(dx, dy) }
+                    onDrag = { dx, dy -> onDragging(dx, dy) },
+                    onDragEnd = { snapToEdge() },
+                    onCollapse = { collapse() },
+                    onExpand = { expand() }
                 )
             }
         }
@@ -83,7 +105,6 @@ class FloatingWindowManager(
             floatingView = composeView
             layoutParams = params
             isShowing = true
-            Log.d("FloatingWindow", "Floating window added successfully at (${params.x}, ${params.y})")
         } catch (e: Exception) {
             Log.e("FloatingWindow", "Failed to add floating window", e)
             lifecycleOwner.onPause()
@@ -92,11 +113,19 @@ class FloatingWindowManager(
         }
     }
 
-    private fun updatePosition(dx: Float, dy: Float) {
+    private fun onDragging(dx: Float, dy: Float) {
+        currentAnimator?.cancel()
         val view = floatingView ?: return
         val params = layoutParams ?: return
+
         params.x += dx.toInt()
         params.y += dy.toInt()
+
+        val maxX = screenWidth - dpToPx(30)
+        val minX = 0
+        params.x = params.x.coerceIn(minX, maxX)
+        params.y = params.y.coerceIn(0, screenHeight - dpToPx(100))
+
         try {
             windowManager.updateViewLayout(view, params)
         } catch (e: Exception) {
@@ -104,12 +133,86 @@ class FloatingWindowManager(
         }
     }
 
+    private fun snapToEdge() {
+        val view = floatingView ?: return
+        val params = layoutParams ?: return
+
+        updateScreenSize()
+
+        val collapsed = isCollapsed.value
+        val viewWidth = if (collapsed) collapsedSizePx else expandedWidthPx
+        val centerX = params.x + viewWidth / 2
+        val targetX: Int
+
+        if (centerX < screenWidth / 2) {
+            targetX = edgePaddingPx
+        } else {
+            targetX = screenWidth - viewWidth - edgePaddingPx
+        }
+
+        animateTo(params.x, targetX)
+    }
+
+    private fun animateTo(startX: Int, endX: Int, duration: Long = 250) {
+        val view = floatingView ?: return
+        val params = layoutParams ?: return
+
+        currentAnimator?.cancel()
+        val animator = ValueAnimator.ofInt(startX, endX)
+        animator.duration = duration
+        animator.addUpdateListener { animation ->
+            params.x = animation.animatedValue as Int
+            try {
+                windowManager.updateViewLayout(view, params)
+            } catch (_: Exception) {}
+        }
+        animator.start()
+        currentAnimator = animator
+    }
+
+    private fun collapse() {
+        if (isCollapsed.value) return
+        isCollapsed.value = true
+
+        val params = layoutParams ?: return
+        updateScreenSize()
+
+        val centerX = params.x + expandedWidthPx / 2
+        val targetX: Int
+        if (centerX < screenWidth / 2) {
+            targetX = edgePaddingPx
+        } else {
+            targetX = screenWidth - collapsedSizePx - edgePaddingPx
+        }
+
+        animateTo(params.x, targetX)
+    }
+
+    private fun expand() {
+        if (!isCollapsed.value) return
+        isCollapsed.value = false
+
+        val params = layoutParams ?: return
+        updateScreenSize()
+
+        val targetX: Int
+        val currentX = params.x
+
+        if (currentX + collapsedSizePx / 2 < screenWidth / 2) {
+            targetX = marginPx
+        } else {
+            targetX = screenWidth - expandedWidthPx - marginPx
+        }
+
+        animateTo(params.x, targetX)
+    }
+
     fun hide() {
         if (!isShowing) return
+        currentAnimator?.cancel()
         floatingView?.let {
             try {
                 windowManager.removeView(it)
-                Log.d("FloatingWindow", "Floating window removed")
             } catch (e: Exception) {
                 Log.e("FloatingWindow", "Failed to remove floating window", e)
             }
@@ -120,6 +223,7 @@ class FloatingWindowManager(
         floatingView = null
         layoutParams = null
         isShowing = false
+        isCollapsed.value = false
     }
 
     fun isShowing(): Boolean = isShowing

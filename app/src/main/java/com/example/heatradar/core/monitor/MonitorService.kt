@@ -53,6 +53,12 @@ data class MonitorState(
     val batteryTempCelsius: Float = 0f,
     val gpuPercent: Float = 0f,
     val gpuFreqMhz: Long = 0L,
+    val fps: Float = 0f,
+    val currentMa: Long = 0L,
+    val voltageV: Float = 0f,
+    val powerMw: Long = 0L,
+    val batteryStatus: String = "",
+    val batteryCapacity: Int = 0,
     val allTemps: List<ThermalZone> = emptyList(),
     val topApps: List<TopAppInfo> = emptyList()
 )
@@ -78,10 +84,15 @@ class MonitorService : Service() {
     @Inject
     lateinit var foregroundAppProvider: ForegroundAppProvider
 
+    @Inject
+    lateinit var shizukuManager: ShizukuServiceManager
+
     private lateinit var windowManager: android.view.WindowManager
     private lateinit var serviceScope: CoroutineScope
     private var samplingJob: Job? = null
     private var floatingWindowManager: FloatingWindowManager? = null
+    private var fpsSampler: FpsSampler? = null
+    private var alertManager: AlertManager? = null
     private var isForegroundStarted = false
     private var dbSampleCount = 0
 
@@ -146,6 +157,8 @@ class MonitorService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
         serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         createNotificationChannel()
+        fpsSampler = FpsSampler(shizukuManager)
+        alertManager = AlertManager(this)
         floatingWindowManager = FloatingWindowManager(this, windowManager) {
             serviceScope.launch {
                 settingsManager.setFloatingWindow(false)
@@ -283,6 +296,8 @@ class MonitorService : Service() {
                     }
 
                     val snapshot = metricsHolder.getSnapshot()
+                    val fps = fpsSampler?.sample() ?: 0f
+                    val p = deviceState.power
                     val newState = MonitorState(
                         cpuPercent = deviceState.cpuUsagePercent,
                         cpuFreqMhz = deviceState.totalCpuFreqMhz,
@@ -297,9 +312,23 @@ class MonitorService : Service() {
                         batteryTempCelsius = deviceState.batteryTempCelsius,
                         gpuPercent = deviceState.gpuBusyPercent,
                         gpuFreqMhz = deviceState.gpuFreqMhz,
+                        fps = fps,
+                        currentMa = p.currentMa,
+                        voltageV = p.voltageV,
+                        powerMw = p.powerMw,
+                        batteryStatus = p.status,
+                        batteryCapacity = p.capacity,
                         allTemps = deviceState.allTemps,
                         topApps = topApps
                     )
+
+                    val triggered = alertManager?.checkAlerts(newState) ?: emptyList()
+                    if (triggered.isNotEmpty()) {
+                        val level = alertManager?.getActiveAlertLevel() ?: AlertLevel.NORMAL
+                        floatingWindowManager?.setAlertLevel(level)
+                    } else if ((alertManager?.hasActiveAlerts() == false) && floatingWindowManager != null) {
+                        floatingWindowManager?.setAlertLevel(AlertLevel.NORMAL)
+                    }
 
                     if (stateChanged(lastState, newState)) {
                         _monitorState.value = newState
@@ -323,6 +352,8 @@ class MonitorService : Service() {
         if (kotlin.math.abs(old.cpuPercent - new.cpuPercent) > 0.5f) return true
         if (kotlin.math.abs(old.memPercent - new.memPercent) > 0.3f) return true
         if (kotlin.math.abs(old.tempCelsius - new.tempCelsius) > 0.5f) return true
+        if (kotlin.math.abs(old.fps - new.fps) > 0.5f) return true
+        if (old.powerMw != new.powerMw) return true
         if (old.topApps.size != new.topApps.size) return true
         for (i in old.topApps.indices) {
             if (old.topApps[i].packageName != new.topApps[i].packageName ||

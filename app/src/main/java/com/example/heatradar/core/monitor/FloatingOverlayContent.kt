@@ -77,6 +77,7 @@ fun MonitorTheme(content: @Composable () -> Unit) {
 fun FloatingOverlayContent(
     state: MonitorState,
     isCollapsed: Boolean = false,
+    alertLevel: AlertLevel = AlertLevel.NORMAL,
     onClose: () -> Unit = {},
     onDrag: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     onDragEnd: () -> Unit = {},
@@ -85,9 +86,9 @@ fun FloatingOverlayContent(
 ) {
     MonitorTheme {
         if (isCollapsed) {
-            CollapsedBubble(state = state, onDrag = onDrag, onDragEnd = onDragEnd, onClick = onExpand)
+            CollapsedBubble(state = state, alertLevel = alertLevel, onDrag = onDrag, onDragEnd = onDragEnd, onClick = onExpand)
         } else {
-            ExpandedPanel(state = state, onClose = onClose, onCollapse = onCollapse, onDrag = onDrag, onDragEnd = onDragEnd)
+            ExpandedPanel(state = state, alertLevel = alertLevel, onClose = onClose, onCollapse = onCollapse, onDrag = onDrag, onDragEnd = onDragEnd)
         }
     }
 }
@@ -113,12 +114,22 @@ private fun getTempColor(temp: Float): Color {
 @Composable
 private fun CollapsedBubble(
     state: MonitorState,
+    alertLevel: AlertLevel,
     onDrag: (dx: Float, dy: Float) -> Unit,
     onDragEnd: () -> Unit,
     onClick: () -> Unit
 ) {
     var dragStarted by remember { mutableStateOf(false) }
-    val bgColor = getCpuColor(state.cpuPercent)
+    val bgColor = when (alertLevel) {
+        AlertLevel.CRITICAL -> Color(0xFFEF5350)
+        AlertLevel.WARNING -> Color(0xFFFFB74D)
+        AlertLevel.NORMAL -> getCpuColor(state.cpuPercent)
+    }
+    val borderColor = when (alertLevel) {
+        AlertLevel.CRITICAL -> Color(0xFFEF5350).copy(alpha = 0.8f)
+        AlertLevel.WARNING -> Color(0xFFFFB74D).copy(alpha = 0.6f)
+        AlertLevel.NORMAL -> Color.Transparent
+    }
 
     Box(
         modifier = Modifier
@@ -126,6 +137,11 @@ private fun CollapsedBubble(
             .clip(CircleShape)
             .background(Color(0xD91A1A2A))
             .alpha(0.9f)
+            .then(
+                if (alertLevel != AlertLevel.NORMAL) {
+                    Modifier.background(borderColor.copy(alpha = 0.15f))
+                } else Modifier
+            )
             .pointerInput(Unit) {
                 detectDragGestures(
                     onDragStart = { dragStarted = true },
@@ -219,6 +235,7 @@ private fun MiniSparkline(
 @Composable
 private fun ExpandedPanel(
     state: MonitorState,
+    alertLevel: AlertLevel,
     onClose: () -> Unit,
     onCollapse: () -> Unit,
     onDrag: (dx: Float, dy: Float) -> Unit,
@@ -227,15 +244,24 @@ private fun ExpandedPanel(
     var currentPage by remember { mutableIntStateOf(0) }
     val history = remember { HistoryBuffer(HISTORY_SIZE) }
 
-    LaunchedEffect(state.cpuPercent, state.memPercent, state.gpuPercent, state.tempCelsius) {
+    LaunchedEffect(state.cpuPercent, state.memPercent, state.gpuPercent, state.tempCelsius, state.powerMw) {
         history.add(state.cpuPercent, state.memPercent, state.gpuPercent, state.tempCelsius)
+    }
+
+    val borderColor = when (alertLevel) {
+        AlertLevel.CRITICAL -> Color(0xFFEF5350)
+        AlertLevel.WARNING -> Color(0xFFFFB74D)
+        AlertLevel.NORMAL -> Color.Transparent
     }
 
     Surface(
         modifier = Modifier.width(260.dp),
         shape = RoundedCornerShape(14.dp),
         color = Color(0xEE12121A),
-        shadowElevation = 8.dp
+        shadowElevation = 8.dp,
+        border = if (alertLevel != AlertLevel.NORMAL) {
+            androidx.compose.foundation.BorderStroke(1.5.dp, borderColor.copy(alpha = 0.7f))
+        } else null
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
             Row(
@@ -290,7 +316,7 @@ private fun ExpandedPanel(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                listOf("概览", "CPU", "GPU/温度", "内存").forEachIndexed { idx, label ->
+                listOf("概览", "CPU", "温度/功耗", "内存").forEachIndexed { idx, label ->
                     val selected = currentPage == idx
                     Box(
                         modifier = Modifier
@@ -316,7 +342,7 @@ private fun ExpandedPanel(
             when (currentPage) {
                 0 -> OverviewPage(state, history)
                 1 -> CpuPage(state, history)
-                2 -> GpuTempPage(state, history)
+                2 -> TempPowerPage(state, history)
                 3 -> MemoryPage(state, history)
             }
         }
@@ -395,6 +421,25 @@ private fun OverviewPage(state: MonitorState, history: HistoryBuffer) {
                 label = "GPU",
                 value = "${state.gpuFreqMhz}MHz  ${String.format("%.0f", state.gpuPercent)}%",
                 valueColor = if (state.gpuPercent >= 70f) Color(0xFFFFB74D) else Color(0xFF4FC3F7)
+            )
+        }
+        if (state.fps > 0f) {
+            MetricRow(
+                label = "FPS",
+                value = String.format("%.0f", state.fps),
+                valueColor = if (state.fps >= 55f) Color(0xFF66BB6A) else if (state.fps >= 30f) Color(0xFFFFB74D) else Color(0xFFEF5350)
+            )
+        }
+        if (state.powerMw > 0) {
+            val powerColor = when {
+                state.powerMw >= 10000 -> Color(0xFFEF5350)
+                state.powerMw >= 6000 -> Color(0xFFFFB74D)
+                else -> Color(0xFF66BB6A)
+            }
+            MetricRow(
+                label = "功耗",
+                value = "${state.powerMw}mW",
+                valueColor = powerColor
             )
         }
         MetricRow(
@@ -493,23 +538,8 @@ private fun CpuFreqBars(freqs: List<Long>, maxFreq: Long) {
 }
 
 @Composable
-private fun GpuTempPage(state: MonitorState, history: HistoryBuffer) {
+private fun TempPowerPage(state: MonitorState, history: HistoryBuffer) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (state.gpuFreqMhz > 0 || state.gpuPercent > 0f) {
-            MetricWithChart(
-                label = "GPU 使用率",
-                value = String.format("%.0f", state.gpuPercent),
-                color = if (state.gpuPercent >= 70f) Color(0xFFFFB74D) else Color(0xFF4FC3F7),
-                historyData = history.gpu.toList(),
-                unit = "%"
-            )
-            MetricRow(
-                label = "GPU 频率",
-                value = "${state.gpuFreqMhz} MHz",
-                valueColor = Color(0xFF4FC3F7)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-        }
         MetricWithChart(
             label = "CPU 温度",
             value = String.format("%.0f", state.tempCelsius),
@@ -523,6 +553,32 @@ private fun GpuTempPage(state: MonitorState, history: HistoryBuffer) {
                 label = "电池温度",
                 value = "${state.batteryTempCelsius}℃",
                 valueColor = getTempColor(state.batteryTempCelsius.toFloat())
+            )
+        }
+        if (state.powerMw > 0) {
+            val powerColor = when {
+                state.powerMw >= 10000 -> Color(0xFFEF5350)
+                state.powerMw >= 6000 -> Color(0xFFFFB74D)
+                else -> Color(0xFF66BB6A)
+            }
+            MetricRow(label = "功耗", value = "${state.powerMw} mW", valueColor = powerColor)
+            MetricRow(label = "电流", value = "${state.currentMa} mA", valueColor = Color(0xFF4FC3F7))
+            MetricRow(label = "电压", value = "${String.format("%.2f", state.voltageV)} V", valueColor = Color(0xFF81C784))
+            if (state.batteryCapacity > 0) {
+                MetricRow(label = "电量", value = "${state.batteryCapacity}%", valueColor = Color(0xFF4FC3F7))
+            }
+            if (state.batteryStatus.isNotEmpty()) {
+                val statusColor = if (state.batteryStatus.equals("Charging", ignoreCase = true))
+                    Color(0xFF66BB6A) else Color(0xFFFFB74D)
+                MetricRow(label = "状态", value = state.batteryStatus, valueColor = statusColor)
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+        if (state.gpuFreqMhz > 0 || state.gpuPercent > 0f) {
+            MetricRow(
+                label = "GPU",
+                value = "${state.gpuFreqMhz}MHz  ${String.format("%.0f", state.gpuPercent)}%",
+                valueColor = if (state.gpuPercent >= 70f) Color(0xFFFFB74D) else Color(0xFF4FC3F7)
             )
         }
         if (state.allTemps.isNotEmpty()) {

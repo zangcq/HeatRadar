@@ -119,6 +119,45 @@ read_gpu() {
     echo "gpu_busy=${_busy_pct:-0} gpu_clk=${_gpu_clk:-0}"
 }
 
+# Read battery current (uA) and voltage (uV), output power (mW)
+read_power() {
+    _current=0
+    _voltage=0
+    _status=""
+    _health=""
+    _capacity=0
+    if [ -f "/sys/class/power_supply/battery/current_now" ]; then
+        _current=$(cat /sys/class/power_supply/battery/current_now 2>/dev/null)
+        _current=${_current:-0}
+    elif [ -f "/sys/class/power_supply/Battery/current_now" ]; then
+        _current=$(cat /sys/class/power_supply/Battery/current_now 2>/dev/null)
+        _current=${_current:-0}
+    fi
+    if [ -f "/sys/class/power_supply/battery/voltage_now" ]; then
+        _voltage=$(cat /sys/class/power_supply/battery/voltage_now 2>/dev/null)
+        _voltage=${_voltage:-0}
+    elif [ -f "/sys/class/power_supply/Battery/voltage_now" ]; then
+        _voltage=$(cat /sys/class/power_supply/Battery/voltage_now 2>/dev/null)
+        _voltage=${_voltage:-0}
+    fi
+    if [ -f "/sys/class/power_supply/battery/status" ]; then
+        _status=$(cat /sys/class/power_supply/battery/status 2>/dev/null | tr -d '\n')
+    fi
+    if [ -f "/sys/class/power_supply/battery/health" ]; then
+        _health=$(cat /sys/class/power_supply/battery/health 2>/dev/null | tr -d '\n')
+    fi
+    if [ -f "/sys/class/power_supply/battery/capacity" ]; then
+        _capacity=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+        _capacity=${_capacity:-0}
+    fi
+    # power = voltage(V) * current(A) = uV * uA / 1e12 = W, so *1000 = mW
+    _power=0
+    if [ "$_current" -ne 0 ] && [ "$_voltage" -ne 0 ] 2>/dev/null; then
+        _power=$(awk -v c="$_current" -v v="$_voltage" 'BEGIN{printf "%.0f", (v*c)/1000000000}')
+    fi
+    echo "current=${_current} voltage=${_voltage} power=${_power} status=${_status} health=${_health} capacity=${_capacity}"
+}
+
 while true; do
     [ -f "$STOP_FILE" ] && cleanup
 
@@ -140,6 +179,7 @@ while true; do
     _freqs=$(read_freqs)
     _mem=$(read_mem)
     _gpu=$(read_gpu)
+    _power=$(read_power)
 
     if top -n 1 -b -q -o PID,USER,%CPU,RSS,NAME > "$TMP_OUTPUT" 2>/dev/null; then
         {
@@ -148,6 +188,7 @@ while true; do
             echo "HR_FREQ ${_freqs}"
             echo "HR_MEM ${_mem}"
             echo "HR_GPU ${_gpu}"
+            echo "HR_POWER ${_power}"
             cat "$TMP_OUTPUT"
         } > "$TOP_OUTPUT" 2>/dev/null
         write_status "running"

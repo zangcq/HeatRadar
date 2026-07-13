@@ -285,6 +285,7 @@ class ProcessScanner @Inject constructor(
             var temps: List<ThermalZone> = emptyList()
             var memory = MemoryInfo()
             var gpu = GpuInfo()
+            var power = PowerInfo()
             var foundCpu = false
 
             for (line in output.lines()) {
@@ -317,12 +318,17 @@ class ProcessScanner @Inject constructor(
                     gpu = parseGpu(trimmed.removePrefix("HR_GPU").trim())
                     continue
                 }
+
+                if (trimmed.startsWith("HR_POWER")) {
+                    power = parsePower(trimmed.removePrefix("HR_POWER").trim())
+                    continue
+                }
             }
 
             if (foundCpu) {
                 if (logCount < 5) {
-                    Log.i(TAG, "parseTopCpuHeader: cpu=%.1f%% cores=%d temps=%d freqs=%d memTotal=%dMB gpu=%.0f%%".format(
-                        totalCpu, cores, temps.size, cpuFreqs.size, memory.totalMb, gpu.gpuBusyPercent))
+                    Log.i(TAG, "parseTopCpuHeader: cpu=%.1f%% cores=%d temps=%d freqs=%d memTotal=%dMB gpu=%.0f%% power=%dmW".format(
+                        totalCpu, cores, temps.size, cpuFreqs.size, memory.totalMb, gpu.gpuBusyPercent, power.powerMw))
                 }
                 metricsHolder.updateFromDaemon(
                     totalCpu = totalCpu,
@@ -330,7 +336,8 @@ class ProcessScanner @Inject constructor(
                     cpuFreqsKhz = cpuFreqs,
                     temps = temps,
                     memory = memory,
-                    gpu = gpu
+                    gpu = gpu,
+                    power = power
                 )
                 metricsHolder.getSnapshot()
             } else {
@@ -392,6 +399,36 @@ class ProcessScanner @Inject constructor(
         return GpuInfo(gpuBusyPercent = busy.coerceIn(0f, 100f), gpuClkHz = clk)
     }
 
+    private fun parsePower(text: String): PowerInfo {
+        var current = 0L
+        var voltage = 0L
+        var power = 0L
+        var status = ""
+        var health = ""
+        var capacity = 0
+        val regex = Regex("(\\w+)=(-?[\\d.]+)")
+        for (match in regex.findAll(text)) {
+            val key = match.groupValues[1]
+            val raw = match.groupValues[2]
+            when (key) {
+                "current" -> current = raw.toLongOrNull() ?: 0L
+                "voltage" -> voltage = raw.toLongOrNull() ?: 0L
+                "power" -> power = raw.toLongOrNull() ?: 0L
+                "status" -> status = raw
+                "health" -> health = raw
+                "capacity" -> capacity = raw.toIntOrNull() ?: 0
+            }
+        }
+        return PowerInfo(
+            currentUa = current,
+            voltageUv = voltage,
+            powerMw = power,
+            status = status,
+            health = health,
+            capacity = capacity
+        )
+    }
+
     private data class TopEntry(
         val pid: Int,
         val user: String,
@@ -408,7 +445,7 @@ class ProcessScanner @Inject constructor(
             trimmed.startsWith("Swap")) return null
         if (trimmed.startsWith("HR_CPU") || trimmed.startsWith("HR_TEMP") ||
             trimmed.startsWith("HR_FREQ") || trimmed.startsWith("HR_MEM") ||
-            trimmed.startsWith("HR_GPU")) return null
+            trimmed.startsWith("HR_GPU") || trimmed.startsWith("HR_POWER")) return null
         if (trimmed.contains("%cpu") || trimmed.contains("cpu%")) return null
 
         val parts = trimmed.split(Regex("\\s+"))

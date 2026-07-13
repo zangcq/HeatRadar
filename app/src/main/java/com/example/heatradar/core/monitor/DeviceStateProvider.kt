@@ -21,7 +21,9 @@ data class DeviceState(
     val gpuBusyPercent: Float = 0f,
     val gpuFreqMhz: Long = 0L,
     val batteryTempCelsius: Float = 0f,
-    val allTemps: List<ThermalZone> = emptyList()
+    val allTemps: List<ThermalZone> = emptyList(),
+    val power: PowerInfo = PowerInfo(),
+    val fps: Float = 0f
 ) {
     companion object {
         val EMPTY = DeviceState(
@@ -96,7 +98,8 @@ class DeviceStateProvider @Inject constructor(
             gpuBusyPercent = s.gpu.gpuBusyPercent,
             gpuFreqMhz = s.gpu.gpuClkMhz,
             batteryTempCelsius = battTemp,
-            allTemps = s.temps
+            allTemps = s.temps,
+            power = s.power
         )
     }
 

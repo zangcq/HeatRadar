@@ -29,6 +29,20 @@ data class GpuInfo(
     val gpuClkMhz: Long get() = gpuClkHz / 1000
 }
 
+data class PowerInfo(
+    val currentUa: Long = 0L,      // micro-amps
+    val voltageUv: Long = 0L,      // micro-volts
+    val powerMw: Long = 0L,        // milli-watts
+    val status: String = "",       // Charging/Discharging/Full
+    val health: String = "",       // Good/Overheat/etc
+    val capacity: Int = 0          // 0-100%
+) {
+    val currentMa: Long get() = currentUa / 1000
+    val voltageV: Float get() = voltageUv / 1_000_000f
+    val isCharging: Boolean get() = status.equals("Charging", ignoreCase = true)
+    val isDischarging: Boolean get() = status.equals("Discharging", ignoreCase = true)
+}
+
 data class ThermalZone(
     val type: String,
     val tempCelsius: Int
@@ -44,6 +58,7 @@ data class SystemMetricsSnapshot(
     val temps: List<ThermalZone> = emptyList(),
     val memory: MemoryInfo = MemoryInfo(),
     val gpu: GpuInfo = GpuInfo(),
+    val power: PowerInfo = PowerInfo(),
     val timestamp: Long = 0L,
     val available: Boolean = false
 ) {
@@ -99,7 +114,8 @@ class SystemMetricsHolder @Inject constructor() {
         cpuFreqsKhz: List<Long>,
         temps: List<ThermalZone>,
         memory: MemoryInfo,
-        gpu: GpuInfo
+        gpu: GpuInfo,
+        power: PowerInfo = PowerInfo()
     ) {
         val now = System.currentTimeMillis()
         snapshot = SystemMetricsSnapshot(
@@ -110,6 +126,7 @@ class SystemMetricsHolder @Inject constructor() {
             temps = temps,
             memory = memory,
             gpu = gpu,
+            power = power,
             timestamp = now,
             available = true
         )

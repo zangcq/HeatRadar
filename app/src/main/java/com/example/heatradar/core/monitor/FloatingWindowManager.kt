@@ -35,6 +35,7 @@ class FloatingWindowManager(
     private var layoutParams: WindowManager.LayoutParams? = null
     private var isShowing = false
     private val isCollapsed: MutableState<Boolean> = mutableStateOf(false)
+    private val alertLevelState: MutableState<AlertLevel> = mutableStateOf(AlertLevel.NORMAL)
     private var currentAnimator: ValueAnimator? = null
 
     private val lifecycleOwner = FloatingLifecycleOwner()
@@ -91,6 +92,7 @@ class FloatingWindowManager(
                 FloatingOverlayContent(
                     state = state,
                     isCollapsed = isCollapsed.value,
+                    alertLevel = alertLevelState.value,
                     onClose = onClose,
                     onDrag = { dx, dy -> onDragging(dx, dy) },
                     onDragEnd = { snapToEdge() },
@@ -227,6 +229,12 @@ class FloatingWindowManager(
     }
 
     fun isShowing(): Boolean = isShowing
+
+    fun setAlertLevel(level: AlertLevel) {
+        if (alertLevelState.value != level) {
+            alertLevelState.value = level
+        }
+    }
 
     private fun dpToPx(dp: Int): Int {
         val density = context.resources.displayMetrics.density

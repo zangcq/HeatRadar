@@ -32,13 +32,15 @@
 ## 📸 截图
 
 <div style="display: flex; gap: 16px; flex-wrap: wrap;">
-  <img src="screenshots/dashboard.png" alt="热源雷达主页" width="280"/>
-  <img src="screenshots/settings.png" alt="设置页" width="280"/>
-  <img src="screenshots/floating.png" alt="悬浮窗" width="200"/>
+  <img src="screenshots/dashboard.png" alt="热源雷达主页" width="350"/>
+  <img src="screenshots/device.jpeg" alt="详情页" width="350"/>
+  <img src="screenshots/floating.jpeg" alt="悬浮窗" width="400"/>
 </div>
 
+
+
 - **主页（热源雷达）**：实时设备状态 + Top10 应用资源占用排行，点击展开查看详细诊断面板
-- **设置页**：守护进程控制、显示选项、采样设置、数据管理、悬浮窗开关、ADB 增强模式
+- **设备详情**：实时设备状态展开查看详细诊断面板，包括CPU、内存、GPU、温度传感器
 - **悬浮窗**：展开模式显示核心指标+Top3应用，收起为44dp迷你球显示CPU百分比，边缘自动吸附
 
 ## 📱 系统要求

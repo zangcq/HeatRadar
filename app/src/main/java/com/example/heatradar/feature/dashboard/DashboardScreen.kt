@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
@@ -65,6 +67,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.heatradar.R
 import com.example.heatradar.core.common.AppResourceSnapshot
 import com.example.heatradar.core.common.DeviceStateSnapshot
+import com.example.heatradar.core.monitor.MonitorState
+import com.example.heatradar.core.monitor.ThermalZone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -121,7 +125,7 @@ fun DashboardScreen(
                 )
             }
 
-            item { DeviceStateCard(uiState.deviceState) }
+            item { DeviceStateCard(uiState.monitorState) }
 
             item {
                 Row(
@@ -412,41 +416,62 @@ fun formatMemorySize(bytes: Long): String {
 }
 
 @Composable
-private fun DeviceStateCard(state: DeviceStateSnapshot) {
+private fun DeviceStateCard(state: MonitorState) {
+    var expanded by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "设备状态（实时）",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "设备状态（实时）",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "收起" else "展开"
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                 CpuMiniSection(state)
                 MemoryMiniSection(state)
-                TemperatureMiniSection(state)
+                TempMiniSection(state)
+                if (state.fps > 0f || state.powerMw > 0) {
+                    ExtraMiniSection(state)
+                }
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(16.dp))
+                DeviceDetailPanel(state)
             }
         }
     }
 }
 
 @Composable
-private fun CpuMiniSection(state: DeviceStateSnapshot) {
+private fun CpuMiniSection(state: MonitorState) {
     val cpuColor = when {
-        state.cpuUsagePercent > 80 -> Color(0xFFD32F2F)
-        state.cpuUsagePercent > 50 -> Color(0xFFFFA000)
+        state.cpuPercent > 80 -> Color(0xFFD32F2F)
+        state.cpuPercent > 50 -> Color(0xFFFFA000)
         else -> Color(0xFF388E3C)
     }
-
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "CPU", style = MaterialTheme.typography.labelSmall)
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "%.0f%%".format(state.cpuUsagePercent),
+            text = "%.0f%%".format(state.cpuPercent),
             style = MaterialTheme.typography.titleLarge,
             color = cpuColor,
             fontWeight = FontWeight.Bold
@@ -461,27 +486,24 @@ private fun CpuMiniSection(state: DeviceStateSnapshot) {
 }
 
 @Composable
-private fun MemoryMiniSection(state: DeviceStateSnapshot) {
+private fun MemoryMiniSection(state: MonitorState) {
     val memColor = when {
-        state.memoryUsagePercent > 85 -> Color(0xFFD32F2F)
-        state.memoryUsagePercent > 70 -> Color(0xFFFFA000)
+        state.memPercent > 85 -> Color(0xFFD32F2F)
+        state.memPercent > 70 -> Color(0xFFFFA000)
         else -> Color(0xFF1976D2)
     }
-    val usedGb = state.usedMemoryBytes / 1_073_741_824.0
-    val totalGb = state.totalMemoryBytes / 1_073_741_824.0
-
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "内存", style = MaterialTheme.typography.labelSmall)
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "%.0f%%".format(state.memoryUsagePercent),
+            text = "%.0f%%".format(state.memPercent),
             style = MaterialTheme.typography.titleLarge,
             color = memColor,
             fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "%.1f/%.1f GB".format(usedGb, totalGb),
+            text = "%d/%d MB".format(state.memUsedMb, state.memTotalMb),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -489,39 +511,267 @@ private fun MemoryMiniSection(state: DeviceStateSnapshot) {
 }
 
 @Composable
-private fun TemperatureMiniSection(state: DeviceStateSnapshot) {
+private fun TempMiniSection(state: MonitorState) {
     val tempColor = when {
-        state.temperatureCelsius >= 50 -> Color(0xFFD32F2F)
-        state.temperatureCelsius >= 42 -> Color(0xFFFFA000)
-        state.temperatureCelsius >= 35 -> Color(0xFFFFD54F)
+        state.tempCelsius >= 45 -> Color(0xFFD32F2F)
+        state.tempCelsius >= 38 -> Color(0xFFFFA000)
+        state.tempCelsius >= 30 -> Color(0xFFFFD54F)
         else -> Color(0xFF388E3C)
     }
-
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "温度", style = MaterialTheme.typography.labelSmall)
         Spacer(modifier = Modifier.height(4.dp))
         Box(
             modifier = Modifier
-                .size(36.dp)
+                .size(40.dp)
                 .clip(CircleShape)
-                .background(tempColor)
-                .padding(4.dp),
+                .background(tempColor),
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = if (state.temperatureCelsius > 0) "%.0f".format(state.temperatureCelsius) else "—",
-                style = MaterialTheme.typography.titleSmall,
+                text = if (state.tempCelsius > 0) "%.0f".format(state.tempCelsius) else "—",
+                style = MaterialTheme.typography.titleMedium,
                 color = Color.White,
                 fontWeight = FontWeight.Bold
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = if (state.temperatureCelsius > 0) "℃" else "",
+            text = if (state.tempCelsius > 0) "℃" else "",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
+}
+
+@Composable
+private fun ExtraMiniSection(state: MonitorState) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        val label: String
+        val value: String
+        val sub: String
+        val color: Color
+        if (state.fps > 0f) {
+            label = "FPS"
+            value = "%.0f".format(state.fps)
+            sub = ""
+            color = when {
+                state.fps >= 55f -> Color(0xFF388E3C)
+                state.fps >= 30f -> Color(0xFFFFA000)
+                else -> Color(0xFFD32F2F)
+            }
+        } else {
+            label = "功耗"
+            value = "%d".format(state.powerMw)
+            sub = "mW"
+            color = when {
+                state.powerMw >= 10000 -> Color(0xFFD32F2F)
+                state.powerMw >= 6000 -> Color(0xFFFFA000)
+                else -> Color(0xFF388E3C)
+            }
+        }
+        Text(text = label, style = MaterialTheme.typography.labelSmall)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleLarge,
+            color = color,
+            fontWeight = FontWeight.Bold
+        )
+        if (sub.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(text = sub, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun DeviceDetailPanel(state: MonitorState) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // CPU 详情
+        DetailSection(title = "CPU") {
+            DetailRow("使用率", "%.1f%%".format(state.cpuPercent), valueColor = getCpuDashboardColor(state.cpuPercent))
+            DetailRow("平均频率", "${state.cpuFreqMhz} MHz")
+            if (state.maxCpuFreqMhz > 0) {
+                DetailRow("最高频率", "${state.maxCpuFreqMhz} MHz")
+            }
+            DetailRow("核心数", "${state.cpuFreqsMhz.size}")
+            if (state.cpuFreqsMhz.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                CpuFreqBarsPanel(freqs = state.cpuFreqsMhz, maxFreq = maxOf(state.maxCpuFreqMhz, state.cpuFreqsMhz.maxOrNull() ?: 0L))
+            }
+        }
+
+        // 内存详情
+        DetailSection(title = "内存") {
+            val usedGb = state.memUsedMb / 1024f
+            val totalGb = state.memTotalMb / 1024f
+            val availGb = state.memAvailableMb / 1024f
+            DetailRow("已用", "%.1f GB".format(usedGb), valueColor = getMemDashboardColor(state.memPercent))
+            DetailRow("可用", "%.1f GB".format(availGb))
+            DetailRow("总计", "%.1f GB".format(totalGb))
+            if (state.memCachedMb > 0) {
+                DetailRow("缓存", "${state.memCachedMb} MB")
+            }
+        }
+
+        // GPU / FPS
+        if (state.gpuPercent > 0f || state.gpuFreqMhz > 0 || state.fps > 0f) {
+            DetailSection(title = "GPU / 帧率") {
+                if (state.gpuFreqMhz > 0) {
+                    DetailRow("GPU 使用率", "%.0f%%".format(state.gpuPercent),
+                        valueColor = if (state.gpuPercent >= 70f) Color(0xFFFFA000) else Color(0xFF1565C0))
+                    DetailRow("GPU 频率", "${state.gpuFreqMhz} MHz")
+                }
+                if (state.fps > 0f) {
+                    DetailRow("当前 FPS", "%.0f".format(state.fps),
+                        valueColor = when {
+                            state.fps >= 55f -> Color(0xFF388E3C)
+                            state.fps >= 30f -> Color(0xFFFFA000)
+                            else -> Color(0xFFD32F2F)
+                        })
+                }
+            }
+        }
+
+        // 温度详情
+        if (state.allTemps.isNotEmpty() || state.batteryTempCelsius > 0f) {
+            DetailSection(title = "温度") {
+                DetailRow("CPU 温度", "%.0f℃".format(state.tempCelsius), valueColor = getTempDashboardColor(state.tempCelsius))
+                if (state.batteryTempCelsius > 0f) {
+                    DetailRow("电池温度", "%.0f℃".format(state.batteryTempCelsius), valueColor = getTempDashboardColor(state.batteryTempCelsius))
+                }
+                if (state.allTemps.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("传感器温度", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    val shown = state.allTemps.filter { it.tempCelsius in 1..99 }.take(10)
+                    val cols = 2
+                    for (r in 0 until (shown.size + cols - 1) / cols) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            for (c in 0 until cols) {
+                                val idx = r * cols + c
+                                if (idx < shown.size) {
+                                    val t = shown[idx]
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(getTempDashboardColor(t.tempCelsius.toFloat())))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Column {
+                                                Text(t.type.take(12), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+                                                Text("${t.tempCelsius}℃",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = getTempDashboardColor(t.tempCelsius.toFloat()))
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                    }
+                }
+            }
+        }
+
+        // 功耗详情
+        if (state.powerMw > 0) {
+            DetailSection(title = "功耗 / 电池") {
+                val powerColor = when {
+                    state.powerMw >= 10000 -> Color(0xFFD32F2F)
+                    state.powerMw >= 6000 -> Color(0xFFFFA000)
+                    else -> Color(0xFF388E3C)
+                }
+                DetailRow("实时功耗", "${state.powerMw} mW", valueColor = powerColor)
+                DetailRow("电流", "${state.currentMa} mA")
+                if (state.voltageV > 0f) {
+                    DetailRow("电压", "%.2f V".format(state.voltageV))
+                }
+                if (state.batteryCapacity > 0) {
+                    DetailRow("电量", "${state.batteryCapacity}%%")
+                }
+                if (state.batteryStatus.isNotEmpty()) {
+                    val statusColor = if (state.batteryStatus.equals("Charging", ignoreCase = true))
+                        Color(0xFF388E3C) else Color(0xFFFFA000)
+                    DetailRow("状态", state.batteryStatus, valueColor = statusColor)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailSection(title: String, content: @Composable () -> Unit) {
+    Column(modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(8.dp))
+        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+        .padding(10.dp)
+    ) {
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(6.dp))
+        content()
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String, valueColor: Color = MaterialTheme.colorScheme.onSurface) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, color = valueColor)
+    }
+}
+
+@Composable
+private fun CpuFreqBarsPanel(freqs: List<Long>, maxFreq: Long) {
+    val maxF = maxFreq.coerceAtLeast(1)
+    Row(
+        modifier = Modifier.fillMaxWidth().height(32.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        freqs.take(16).forEach { f ->
+            val ratio = f.toFloat() / maxF.toFloat()
+            val hRatio = ratio.coerceIn(0.05f, 1f)
+            val color = when {
+                ratio >= 0.8f -> Color(0xFFD32F2F)
+                ratio >= 0.5f -> Color(0xFFFFA000)
+                ratio >= 0.2f -> Color(0xFFFFD54F)
+                else -> Color(0xFF388E3C)
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height((28 * hRatio).dp)
+                    .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp))
+                    .background(color)
+            )
+        }
+    }
+}
+
+private fun getCpuDashboardColor(p: Float) = when {
+    p >= 80f -> Color(0xFFD32F2F)
+    p >= 50f -> Color(0xFFFFA000)
+    else -> Color(0xFF388E3C)
+}
+private fun getMemDashboardColor(p: Float) = when {
+    p >= 85f -> Color(0xFFD32F2F)
+    p >= 70f -> Color(0xFFFFA000)
+    else -> Color(0xFF1976D2)
+}
+private fun getTempDashboardColor(t: Float) = when {
+    t >= 45f -> Color(0xFFD32F2F)
+    t >= 38f -> Color(0xFFFFA000)
+    t >= 30f -> Color(0xFFFFD54F)
+    else -> Color(0xFF388E3C)
 }
 
 @Composable

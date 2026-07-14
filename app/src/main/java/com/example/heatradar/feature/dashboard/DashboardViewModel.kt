@@ -65,12 +65,14 @@ class DashboardViewModel @Inject constructor(
 
     val uiState: StateFlow<DashboardUiState> = combine(
         repository.observeLatestSamples(),
-        repository.observeLatestDeviceState()
-    ) { samples, deviceState ->
+        repository.observeLatestDeviceState(),
+        com.example.heatradar.core.monitor.MonitorService.monitorState
+    ) { samples, deviceState, monitorState ->
         DashboardUiState(
             cpuTop = samples.sortedByDescending { it.cpuPercent }.take(15),
             memoryTop = samples.sortedByDescending { it.memoryBytes }.take(5),
             deviceState = deviceState,
+            monitorState = monitorState,
             isLoading = false
         )
     }

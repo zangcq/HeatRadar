@@ -18,11 +18,11 @@ enum class AlertType {
 data class AlertThresholds(
     val cpuWarning: Float = 70f,
     val cpuCritical: Float = 90f,
-    val memWarning: Float = 80f,
+    val memWarning: Float = 85f,
     val memCritical: Float = 95f,
-    val tempWarning: Float = 42f,
-    val tempCritical: Float = 48f,
-    val powerWarning: Long = 8000L,  // mW
+    val tempWarning: Float = 47f,
+    val tempCritical: Float = 53f,
+    val powerWarning: Long = 8000L,
     val durationSeconds: Int = 10
 )
 

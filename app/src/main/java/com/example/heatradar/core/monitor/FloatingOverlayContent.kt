@@ -338,29 +338,36 @@ private fun ExpandedPanel(
                 )
             }
 
-            val top = state.topApps.firstOrNull()
-            if (top != null) {
+            val topApps = state.topApps.take(3)
+            if (topApps.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(6.dp))
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth()
                         .clip(RoundedCornerShape(6.dp))
                         .background(Color.White.copy(alpha = 0.06f))
                         .padding(horizontal = 8.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Text(
-                        text = top.appName.take(10),
-                        color = Color.White.copy(alpha = 0.85f),
-                        fontSize = 10.sp,
-                        maxLines = 1
-                    )
-                    Text(
-                        text = String.format("%.0f%%", top.cpuPercent),
-                        color = getCpuColor(top.cpuPercent),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    topApps.forEachIndexed { idx, top ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${idx + 1}. ${top.appName.take(10)}",
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 10.sp,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = String.format("%.0f%%", top.cpuPercent),
+                                color = getCpuColor(top.cpuPercent),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         }

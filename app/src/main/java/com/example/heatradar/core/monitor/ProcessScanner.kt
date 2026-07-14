@@ -286,6 +286,7 @@ class ProcessScanner @Inject constructor(
             var memory = MemoryInfo()
             var gpu = GpuInfo()
             var power = PowerInfo()
+            var network = NetworkInfo()
             var foundCpu = false
 
             for (line in output.lines()) {
@@ -323,12 +324,18 @@ class ProcessScanner @Inject constructor(
                     power = parsePower(trimmed.removePrefix("HR_POWER").trim())
                     continue
                 }
+
+                if (trimmed.startsWith("HR_NET")) {
+                    network = parseNetwork(trimmed.removePrefix("HR_NET").trim())
+                    continue
+                }
             }
 
             if (foundCpu) {
                 if (logCount < 5) {
-                    Log.i(TAG, "parseTopCpuHeader: cpu=%.1f%% cores=%d temps=%d freqs=%d memTotal=%dMB gpu=%.0f%% power=%dmW".format(
-                        totalCpu, cores, temps.size, cpuFreqs.size, memory.totalMb, gpu.gpuBusyPercent, power.powerMw))
+                    Log.i(TAG, "parseTopCpuHeader: cpu=%.1f%% cores=%d temps=%d freqs=%d memTotal=%dMB gpu=%.0f%% power=%dmW down=%s up=%s".format(
+                        totalCpu, cores, temps.size, cpuFreqs.size, memory.totalMb, gpu.gpuBusyPercent, power.powerMw,
+                        network.downDisplay, network.upDisplay))
                 }
                 metricsHolder.updateFromDaemon(
                     totalCpu = totalCpu,
@@ -337,7 +344,8 @@ class ProcessScanner @Inject constructor(
                     temps = temps,
                     memory = memory,
                     gpu = gpu,
-                    power = power
+                    power = power,
+                    network = network
                 )
                 metricsHolder.getSnapshot()
             } else {
@@ -429,6 +437,19 @@ class ProcessScanner @Inject constructor(
         )
     }
 
+    private fun parseNetwork(text: String): NetworkInfo {
+        var down = 0L
+        var up = 0L
+        val regex = Regex("(\\w+)=(-?\\d+)")
+        for (match in regex.findAll(text)) {
+            when (match.groupValues[1]) {
+                "down" -> down = match.groupValues[2].toLongOrNull() ?: 0L
+                "up" -> up = match.groupValues[2].toLongOrNull() ?: 0L
+            }
+        }
+        return NetworkInfo(downBps = down.coerceAtLeast(0L), upBps = up.coerceAtLeast(0L))
+    }
+
     private data class TopEntry(
         val pid: Int,
         val user: String,
@@ -445,7 +466,8 @@ class ProcessScanner @Inject constructor(
             trimmed.startsWith("Swap")) return null
         if (trimmed.startsWith("HR_CPU") || trimmed.startsWith("HR_TEMP") ||
             trimmed.startsWith("HR_FREQ") || trimmed.startsWith("HR_MEM") ||
-            trimmed.startsWith("HR_GPU") || trimmed.startsWith("HR_POWER")) return null
+            trimmed.startsWith("HR_GPU") || trimmed.startsWith("HR_POWER") ||
+            trimmed.startsWith("HR_NET")) return null
         if (trimmed.contains("%cpu") || trimmed.contains("cpu%")) return null
 
         val parts = trimmed.split(Regex("\\s+"))

@@ -150,13 +150,61 @@ read_power() {
         _capacity=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
         _capacity=${_capacity:-0}
     fi
-    # power = voltage(V) * current(A) = uV * uA / 1e12 = W, so *1000 = mW
     _power=0
     if [ "$_current" -ne 0 ] && [ "$_voltage" -ne 0 ] 2>/dev/null; then
         _power=$(awk -v c="$_current" -v v="$_voltage" 'BEGIN{printf "%.0f", (v*c)/1000000000}')
     fi
     echo "current=${_current} voltage=${_voltage} power=${_power} status=${_status} health=${_health} capacity=${_capacity}"
 }
+
+# Read network traffic from /proc/net/dev, output total rx/tx bytes
+read_net() {
+    _rx=0
+    _tx=0
+    while IFS=: read -r iface rest; do
+        iface=$(echo "$iface" | tr -d ' ')
+        case "$iface" in
+            lo|ifb*|dummy*|sit*|ip6tnl*|p2p*|wlan_p2p*|v4-*|v6-*|rmnet_ipa*) continue ;;
+        esac
+        set -- $rest
+        _rx=$((_rx + ${1:-0}))
+        _tx=$((_tx + ${9:-0}))
+    done < /proc/net/dev 2>/dev/null
+    echo "rx=${_rx} tx=${_tx}"
+}
+
+# Read network speed using delta from previous reading
+read_net_speed() {
+    _cur=$(read_net)
+    eval "$_cur"
+    _now=$(date +%s%N 2>/dev/null || echo 0)
+    if [ -z "$_last_rx" ] || [ -z "$_last_tx" ] || [ -z "$_last_net_time" ]; then
+        _last_rx=$rx
+        _last_tx=$tx
+        _last_net_time=$_now
+        echo "down=0 up=0"
+        return
+    fi
+    if [ "$_now" -gt "$_last_net_time" ] 2>/dev/null; then
+        _dt_ns=$((_now - _last_net_time))
+        _drx=$((rx - _last_rx))
+        _dtx=$((tx - _last_tx))
+        _drx=${_drx#-}
+        _dtx=${_dtx#-}
+        _down_bps=$(awk -v b="$_drx" -v dt="$_dt_ns" 'BEGIN{ if(dt>0) printf "%.0f", b*1000000000/dt; else print 0 }')
+        _up_bps=$(awk -v b="$_dtx" -v dt="$_dt_ns" 'BEGIN{ if(dt>0) printf "%.0f", b*1000000000/dt; else print 0 }')
+        _last_rx=$rx
+        _last_tx=$tx
+        _last_net_time=$_now
+        echo "down=${_down_bps} up=${_up_bps}"
+    else
+        echo "down=0 up=0"
+    fi
+}
+
+_last_rx=""
+_last_tx=""
+_last_net_time=""
 
 while true; do
     [ -f "$STOP_FILE" ] && cleanup
@@ -180,6 +228,7 @@ while true; do
     _mem=$(read_mem)
     _gpu=$(read_gpu)
     _power=$(read_power)
+    _net=$(read_net_speed)
 
     if top -n 1 -b -q -o PID,USER,%CPU,RSS,NAME > "$TMP_OUTPUT" 2>/dev/null; then
         {
@@ -189,6 +238,7 @@ while true; do
             echo "HR_MEM ${_mem}"
             echo "HR_GPU ${_gpu}"
             echo "HR_POWER ${_power}"
+            echo "HR_NET ${_net}"
             cat "$TMP_OUTPUT"
         } > "$TOP_OUTPUT" 2>/dev/null
         write_status "running"

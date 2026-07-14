@@ -59,6 +59,8 @@ data class MonitorState(
     val powerMw: Long = 0L,
     val batteryStatus: String = "",
     val batteryCapacity: Int = 0,
+    val netDownBps: Long = 0L,
+    val netUpBps: Long = 0L,
     val allTemps: List<ThermalZone> = emptyList(),
     val topApps: List<TopAppInfo> = emptyList()
 )
@@ -298,6 +300,7 @@ class MonitorService : Service() {
                     val snapshot = metricsHolder.getSnapshot()
                     val fps = fpsSampler?.sample() ?: 0f
                     val p = deviceState.power
+                    val n = deviceState.network
                     val newState = MonitorState(
                         cpuPercent = deviceState.cpuUsagePercent,
                         cpuFreqMhz = deviceState.totalCpuFreqMhz,
@@ -318,6 +321,8 @@ class MonitorService : Service() {
                         powerMw = p.powerMw,
                         batteryStatus = p.status,
                         batteryCapacity = p.capacity,
+                        netDownBps = n.downBps,
+                        netUpBps = n.upBps,
                         allTemps = deviceState.allTemps,
                         topApps = topApps
                     )

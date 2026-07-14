@@ -691,7 +691,7 @@ private fun DeviceDetailPanel(state: MonitorState) {
                     DetailRow("电压", "%.2f V".format(state.voltageV))
                 }
                 if (state.batteryCapacity > 0) {
-                    DetailRow("电量", "${state.batteryCapacity}%%")
+                    DetailRow("电量", "${state.batteryCapacity}%")
                 }
                 if (state.batteryStatus.isNotEmpty()) {
                     val statusColor = if (state.batteryStatus.equals("Charging", ignoreCase = true))
@@ -700,6 +700,32 @@ private fun DeviceDetailPanel(state: MonitorState) {
                 }
             }
         }
+
+        // 网络速度
+        if (state.netDownBps > 0 || state.netUpBps > 0) {
+            DetailSection(title = "网络速度") {
+                val downColor = when {
+                    state.netDownBps >= 10 * 1024 * 1024 -> Color(0xFFD32F2F)
+                    state.netDownBps >= 1024 * 1024 -> Color(0xFFFFA000)
+                    else -> Color(0xFF388E3C)
+                }
+                val upColor = when {
+                    state.netUpBps >= 5 * 1024 * 1024 -> Color(0xFFD32F2F)
+                    state.netUpBps >= 512 * 1024 -> Color(0xFFFFA000)
+                    else -> Color(0xFF1976D2)
+                }
+                DetailRow("↓ 下行", formatNetSpeed(state.netDownBps), valueColor = downColor)
+                DetailRow("↑ 上行", formatNetSpeed(state.netUpBps), valueColor = upColor)
+            }
+        }
+    }
+}
+
+private fun formatNetSpeed(bps: Long): String {
+    return when {
+        bps >= 1024 * 1024 -> "%.1f MB/s".format(bps.toFloat() / (1024f * 1024f))
+        bps >= 1024 -> "%.0f KB/s".format(bps.toFloat() / 1024f)
+        else -> "$bps B/s"
     }
 }
 

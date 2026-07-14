@@ -43,6 +43,27 @@ data class PowerInfo(
     val isDischarging: Boolean get() = status.equals("Discharging", ignoreCase = true)
 }
 
+data class NetworkInfo(
+    val downBps: Long = 0L,
+    val upBps: Long = 0L
+) {
+    val downKbps: Float get() = downBps / 1024f
+    val upKbps: Float get() = upBps / 1024f
+    val downMbps: Float get() = downBps / (1024f * 1024f)
+    val upMbps: Float get() = upBps / (1024f * 1024f)
+
+    val downDisplay: String get() = when {
+        downMbps >= 1f -> "%.1f MB/s".format(downMbps)
+        downKbps >= 1f -> "%.0f KB/s".format(downKbps)
+        else -> "%d B/s".format(downBps)
+    }
+    val upDisplay: String get() = when {
+        upMbps >= 1f -> "%.1f MB/s".format(upMbps)
+        upKbps >= 1f -> "%.0f KB/s".format(upKbps)
+        else -> "%d B/s".format(upBps)
+    }
+}
+
 data class ThermalZone(
     val type: String,
     val tempCelsius: Int
@@ -59,6 +80,7 @@ data class SystemMetricsSnapshot(
     val memory: MemoryInfo = MemoryInfo(),
     val gpu: GpuInfo = GpuInfo(),
     val power: PowerInfo = PowerInfo(),
+    val network: NetworkInfo = NetworkInfo(),
     val timestamp: Long = 0L,
     val available: Boolean = false
 ) {
@@ -115,7 +137,8 @@ class SystemMetricsHolder @Inject constructor() {
         temps: List<ThermalZone>,
         memory: MemoryInfo,
         gpu: GpuInfo,
-        power: PowerInfo = PowerInfo()
+        power: PowerInfo = PowerInfo(),
+        network: NetworkInfo = NetworkInfo()
     ) {
         val now = System.currentTimeMillis()
         snapshot = SystemMetricsSnapshot(
@@ -127,6 +150,7 @@ class SystemMetricsHolder @Inject constructor() {
             memory = memory,
             gpu = gpu,
             power = power,
+            network = network,
             timestamp = now,
             available = true
         )

@@ -23,6 +23,7 @@ data class DeviceState(
     val batteryTempCelsius: Float = 0f,
     val allTemps: List<ThermalZone> = emptyList(),
     val power: PowerInfo = PowerInfo(),
+    val network: NetworkInfo = NetworkInfo(),
     val fps: Float = 0f
 ) {
     companion object {
@@ -99,7 +100,8 @@ class DeviceStateProvider @Inject constructor(
             gpuFreqMhz = s.gpu.gpuClkMhz,
             batteryTempCelsius = battTemp,
             allTemps = s.temps,
-            power = s.power
+            power = s.power,
+            network = s.network
         )
     }
 

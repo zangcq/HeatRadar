@@ -69,7 +69,7 @@ class DashboardViewModel @Inject constructor(
         com.example.heatradar.core.monitor.MonitorService.monitorState
     ) { samples, deviceState, monitorState ->
         DashboardUiState(
-            cpuTop = samples.sortedByDescending { it.cpuPercent }.take(15),
+            cpuTop = samples.sortedByDescending { it.cpuPercent }.take(10),
             memoryTop = samples.sortedByDescending { it.memoryBytes }.take(5),
             deviceState = deviceState,
             monitorState = monitorState,
